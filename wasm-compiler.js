@@ -12,6 +12,8 @@ let g = Function('return this')();
 
 const DuplicateModule = module.exports.DuplicateModule = Symbol("NewModuleFnc");
 
+module.exports.CompileWasmFunctionsName = "CompileWasmFunctions";
+
 function leb128Parse(index, buffer) {
     let bytes = [];
     while (index < buffer.length) {

@@ -3,48 +3,70 @@ const child_process = require("child_process");
 const clang = require("clang-wasm");
 const { compile } = require("./wasm-compiler");
 
-//import { generateSourceMap, replaceSourceMapURL } from "../loaders/wasm-to-sourcemap";
+const { generateSourceMap, replaceSourceMapURL, removeDwarfSection } = require("./wasm-to-sourcemap");
 
 
 const loaderUtils = require("loader-utils");
 
+function readFilePromise(filePath) {
+    return new Promise((resolve, reject) => {
+        fs.readFile(filePath, (err, data) => {
+            err ? reject(err) : resolve(data);
+        });
+    });
+}
+function writeFilePromise(filePath, contents) {
+    return new Promise((resolve, reject) => {
+        fs.writeFile(filePath, contents, (err, data) => {
+            err ? reject(err) : resolve(data);
+        });
+    });
+}
+
 module.exports.transform = async function() {
-    //todonext;
-    // We need to figure out how to get a temporary path to write the .wasm file to (actually... really an output path)
-    //  AND! Build without dev server so we can see the outputs!
-    //debugger;
-
-    //this.emitFile("wasmcompiler", `module.exports.fnc = function() { console.log("asf9hasd9uasdfh"); debugger; }`)
-
     let wasmCompilerUrl = loaderUtils.stringifyRequest(this, require.resolve("./wasm-compiler.js"));
-
 
     // The results of the loader, depends on the loader code (this file). I am not sure why this isn't automatic...
     //  Although usually the require.cache isn't cleared for loaders... although that should probably be done automatically too...
     this.addDependency(require("path").resolve(__filename));
     //this.addDependency(require("path").resolve(compileArgumentsPath));
-    // clang --target=wasm32 -nostdlib -Wl,--no-entry -Wl,--export-all -o add2.wasm add2.cpp   
-    let inputPath = this.resourcePath.replace(/\\/g, "/");
-    //let wasmPath = tmpdir() + "/" + Math.random().toString().substring(3) + ".temp.wasm";
-    //let wasmPath = inputPath + ".temp.wasm";
 
     
+    let inputPath = this.resourcePath.replace(/\\/g, "/");
+
     let relativePath = this._module.resource.slice(this.rootContext.length).replace(/\\/g, "/");
     // We need *A* output path, but it doesn't need to be in the output directory, or something sensible. However,
     //  using a path that is symmetrical with the input file, but in the output directory, makes debugging easier.
     //let wasmPath = loaderUtils.getOptions(this).output.path + "/" + relativePath + ".wasm";
-    debugger;
     let wasmPath = this._compilation.options.output.path.replace(/\\/g, "/") + "/" + relativePath + ".wasm";
+
     await new Promise(resolve => fs.mkdir(require("path").dirname(wasmPath), { recursive: true }, resolve));
 
-
     let buildTime = Date.now();
-    let wasmFile = await compileCpp(inputPath, wasmPath, includes => {
+    await compileCpp(inputPath, wasmPath, includes => {
         for (let include of includes) {
             this.addDependency(require("path").resolve(include));
         }
     });
+    let wasmFile = await readFilePromise(wasmPath);
     buildTime = Date.now() - buildTime;
+
+
+    let enableSourceMaps = true;
+    let sourceMapUrl = "";
+    if (enableSourceMaps) {
+        let sourceMap = await generateSourceMap(wasmFile, () => true, undefined, true);
+        if (sourceMap) {
+            // Embed source map as a data url. Sure, 33% overhead, BUT we don't have to worry about the path
+            //  of the source map (which is hard to manage, especially when we rebundle the files, etc).
+            sourceMapUrl = "data:application/json;base64," + Buffer.from(JSON.stringify(sourceMap)).toString("base64");
+            wasmFile = replaceSourceMapURL(wasmFile, () => sourceMapUrl);
+
+            //wasmFile = removeDwarfSection(wasmFile);
+            //await writeFilePromise(wasmPath + ".map", JSON.stringify(sourceMap, null, 4));
+        }
+    }
+
 
     sha3_512 = await sha3_512;
     let hash = Buffer.from(sha3_512(wasmFile)).toString("base64");
@@ -65,7 +87,7 @@ const sha3_512Source = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 35, 7, 96
 const createSha3_512 = module.exports.createSha3_512 = function createSha3_512() {
     return (async () => {
         let fscryptctl2 = compile(sha3_512Source, "SHA3_512_for_loader");
-        await fscryptctl2.Init();
+        await fscryptctl2.CompileWasmFunctions();
         return function sha3_512(input) {
             fscryptctl2.SHA512_init();
             for (let j = 0; j < input.length; j += fscryptctl2.sha512InputData.length) {
@@ -86,6 +108,7 @@ const compileCpp = module.exports.compileCpp = async function compileCpp(inputPa
     let includeFilesResult = new Promise((resolve, reject) => {
         includeFilesResultCallback = resolve;
     });
+    // clang --target=wasm32 -nostdlib -Wl,--no-entry -Wl,--export-all -o add2.wasm add2.cpp
     let parameters = [
         `--target=wasm32`,
         `-nostdlib`,
@@ -97,8 +120,8 @@ const compileCpp = module.exports.compileCpp = async function compileCpp(inputPa
         //`-fdebug-macro`,
         //`-fstandalone-debug`,
 
-        //`-g`,
-        `-Ofast`,
+        `-g`,
+        //`-Ofast`,
     ];
     child_process.execFile(clang.getBinaryPath("clang"), parameters.concat([
         `-o`,
@@ -116,19 +139,4 @@ const compileCpp = module.exports.compileCpp = async function compileCpp(inputPa
     if (compileError) {
         throw compileError;
     }
-    let wasmFile = fs.readFileSync(wasmPath);
-    let enableSourceMaps = true;
-    let sourceMapUrl = "";
-    /*
-    if (enableSourceMaps) {
-        let sourceMap = await generateSourceMap(wasmFile, () => true, undefined, true);
-        if (sourceMap) {
-            // This is CLEARLY the best way to do this. Sure, 33% overhead, BUT we don't have to worry about the path
-            //  of the source map (which is hard to manage, especially when we rebundle the files, etc).
-            sourceMapUrl = "data:application/json;base64," + Buffer.from(JSON.stringify(sourceMap)).toString("base64");
-            wasmFile = replaceSourceMapURL(wasmFile, () => sourceMapUrl);
-        }
-    }
-    */
-    return wasmFile;
 };
