@@ -8,6 +8,8 @@
 // We should take our compilation from devserver to just webpack, so we can see if emitFile really does nothing? And if it does something...
 //  we should use it (maybe with loader-utils) to properly get a file path for our .wasm temp outputs.
 
+let { getWasmMemoryExports, getWasmFunctionExports } = require("./wasm-to-sourcemap");
+
 let g = Function('return this')();
 
 const DuplicateModule = module.exports.DuplicateModule = Symbol("NewModuleFnc");
@@ -94,17 +96,20 @@ function getExportNames(sections) {
 
 
 g.wasmCompilerCompileCache = g.wasmCompilerCompileCache || Object.create(null);
-module.exports.compile = function compile(webAssembly, compilationCacheKey) {
+module.exports.compile = function compile(webAssembly, compilationCacheKey, functionsForImports = Object.create(null)) {
     if (compilationCacheKey) {
         if (compilationCacheKey in g.wasmCompilerCompileCache) {
             return g.wasmCompilerCompileCache[compilationCacheKey];
         }
     }
 
+    const MemoryBufferAddress = Symbol("MemoryBufferAddress");
+    const WasmFncObj = Symbol("WasmFncObj");
+
     // An object where we put all the exports, once they are loaded
     let exportsObj = Object.create(null);
 
-    // Some basic error handling, so at least   throw "x too big";   can work.
+    // Some basic error handling, so at least string throws (such as   throw "x too big"; )  can work.
     function getLastError() {
         if("lastErrorStringForShim" in exportsObj) {
             if (exportsObj.lastErrorStringForShim[0]) {
@@ -112,9 +117,9 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey) {
                 return new TextDecoder().decode(exportsObj.lastErrorStringForShim.slice(1, length + 1));
             }
         }
-        return `A call from wasm to the javascript wrapping function "throwCurrentError" was made, but the waasm file has no lastErrorStringForShim export (an array containing the error), so this is invalid.`;
+        return `A call from wasm to the javascript wrapping function "SHIM__throwCurrentError" was made, but the waasm file has no lastErrorStringForShim export (an array containing the error), so this is invalid.`;
     }
-    function throwCurrentError() {
+    function SHIM__throwCurrentError() {
         let error = new Error(getLastError());
         // Remove our junk from the stack
         if (error.stack) {
@@ -131,71 +136,132 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey) {
 
     let moduleObjPromise = WebAssembly.instantiate(webAssembly, {
         env: {
-            throwCurrentError
+            SHIM__throwCurrentError,
+            ... functionsForImports
         },
     });
-    let dataExports = Object.create(null);
+    /*
+    let arrayObj = new Float64Array(baseExports.memory.buffer, offset, count);
+    */
+
+    let memoryExports = getWasmMemoryExports(webAssembly);
+    for(let exportName in memoryExports) {
+        let { size, address } = memoryExports[exportName];
+        exportsObj[exportName] = Buffer.alloc(size);
+        exportsObj[exportName][MemoryBufferAddress] = address;
+    }
+
+    let functionExports = undefined;
+    try {
+        functionExports = getWasmFunctionExports(webAssembly);
+    } catch(e) {}
+    if(functionExports) {
+        for(let fncExport of functionExports) {
+            if(fncExport.warning) continue;
+
+            exportsObj[fncExport.name] = async function() {
+                let loadedExports = await exportsPromise;
+                return loadedExports[exportName](...arguments);
+            };
+            exportsObj[fncExport.name][WasmFncObj] = fncExport;
+        }
+    }
+
 
     let exportsLoaded = false;
     // Once the module loads, update exportsObj to have the actual correct functions, and typed arrays.
     let exportsPromise = moduleObjPromise.then((moduleObj) => {
         let baseExports = moduleObj.instance.exports;
-        // Clear out the previous shimmed keys
-        for(let key of Object.keys(exportsObj)) {
-            // But not CompileWasmFunctions, unless they've defined an CompileWasmFunctions function.
-            if(key === "CompileWasmFunctions" && !baseExports["CompileWasmFunctions"]) continue;
-            delete exportsObj[key];
-        }
-        // Map specially named exports to javascript memory constructs (typed arrays).
-        for (let key in baseExports) {
-            if (key.startsWith("SHIM_part_")) {
-                continue;
-            }
-            if (key.startsWith("SHIM_array_")) {
-                let name = key.split("_").slice(2).join("_");
-                let offset = baseExports[`SHIM_array_${name}`]();
-                let count = baseExports[`SHIM_part_${name}_count`]();
-                let size = baseExports[`SHIM_part_${name}_sizeBytes`]();
-                let isSigned = baseExports[`SHIM_part_${name}_isSigned`]();
-                let isFloat = baseExports[`SHIM_part_${name}_isFloat`]();
-                let v = (isFloat ? "f" : "i") + (isSigned ? "s" : "u") + size;
-                let Ctor;
-                if (v === "iu1")
-                    Ctor = Uint8Array;
-                else if (v === "is1")
-                    Ctor = Int8Array;
-                else if (v === "iu2")
-                    Ctor = Uint16Array;
-                else if (v === "is2")
-                    Ctor = Int16Array;
-                else if (v === "iu4")
-                    Ctor = Uint32Array;
-                else if (v === "is4")
-                    Ctor = Int32Array;
-                else if (v === "fs4")
-                    Ctor = Float32Array;
-                else if (v === "fs8")
-                    Ctor = Float64Array;
-                else
-                    throw new Error(`No handling for exported type called ${name}. It is a ${size} byte ${(isSigned ? "signed" : "unsigned")}${isFloat ? "floating point" : ""} number`);
-                let arrayObj = new Ctor(baseExports.memory.buffer, offset, count);
-                dataExports[name] = true;
-                exportsObj[name] = arrayObj;
-            }
+
+        exportsObj["memory"] = Buffer.from(baseExports.memory.buffer);
+
+        let memoryBufferLookup = Object.create(null);
+
+        for(let exportName in memoryExports) {
+            let { size, address } = memoryExports[exportName];
+            let buffer = Buffer.from(baseExports.memory.buffer, address, size);
+            buffer.set(exportsObj[exportName]);
+            exportsObj[exportName] = buffer;
+            exportsObj[exportName][MemoryBufferAddress] = address;
+            memoryBufferLookup[address] = buffer;
         }
 
-        for (let key in baseExports) {
-            if (key.startsWith("SHIM_part_"))
-                continue;
-            if (key.startsWith("SHIM_array_"))
-                continue;
-            // Global values have their locations exported, but we can ignore those if we have a SHIM for them.
-            if (key in exportsObj)
-                continue;
-            let baseFnc = baseExports[key];
-            if (typeof baseFnc !== "function")
-                continue;
-            exportsObj[key] = baseFnc;
+        if(!functionExports) {
+            for(let name in baseExports)  {
+                let fnc = baseExports[name];
+                if(typeof fnc === "function") {
+                    exportsObj[name] = fnc;
+                }
+            }
+        } else {
+            console.log(functionExports);
+
+            let fncIdLookup = Object.create(null)
+            for(let fncExport of functionExports) {
+                if(fncExport.warning) continue;
+                if("elemId" in fncExport) {
+                    fncIdLookup[fncExport.elemId] = fncExport;
+                }
+            }
+
+            for(let fncExport of functionExports) {
+                if(fncExport.warning) continue;
+
+                // TODO: If fncExport.javascriptTypeNames has any types which are pointers? Then wrap it, so that we check all of the arguments
+                //  and convert any Buffers that our from this module to pass the correct memory offsets.
+                let fnc = baseExports[fncExport.name];
+
+                exportsObj[fncExport.name] = fnc;
+
+                let needsShim = fncExport.javascriptTypeNames.some(x => x.type.pointer || x.type.subFunction) || fncExport.returnType.pointer || fncExport.returnType.subFunction;
+
+                if(needsShim) {
+                    exportsObj[fncExport.name] = function() {
+                        let args = Array.from(arguments);
+                        args = args.map(arg => {
+                            if(arg && typeof arg === "object") {
+                                if(MemoryBufferAddress in arg) {
+                                    return arg[MemoryBufferAddress];
+                                }
+                            }
+
+                            if(typeof arg === "function") {
+                                if(WasmFncObj in arg) {
+                                    let fncObj = arg[WasmFncObj];
+                                    if("elemId" in fncObj) {
+                                        return fncObj.elemId;
+                                    }
+                                }
+
+                                console.warn(`Passed unknown javascript function to wasm function. You may only pass functions from a wasm module back to the same module.`, arg);
+                            }
+
+                            return arg;
+                        });
+
+                        let result = fnc(...args);
+
+                        if(fncExport.returnType.pointer) {
+                            if(result in memoryBufferLookup) {
+                                return memoryBufferLookup[result];
+                            } else {
+                                console.warn(`Returned address from pointer function which does not correspond to an exported memory address. Just returneding the address by itself`, fncExport);
+                            }
+                        }
+                        if(fncExport.returnType.subFunction) {
+                            let elemId = result;
+                            if(elemId in fncIdLookup) {
+                                return exportsObj[fncIdLookup[elemId].name];
+                            } else {
+                                console.warn(`Returned element id (from a function that returns a function) that doesn't correspond to any element ids we know.`, fncExport, elemId, fncIdLookup);
+                            }
+                        }
+
+                        return result;
+                    };
+                }
+                exportsObj[fncExport.name][WasmFncObj] = fncExport;
+            }
         }
 
         exportsLoaded = true;
@@ -209,18 +275,10 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey) {
             return exportsObj;
         }
 
-        return moduleObjPromise;
+        return exportsPromise;
     };
     exportsObj[DuplicateModule] = function () {
         return compile(webAssembly);
-    }
-
-    let exportNames = getExportNames(getSections(webAssembly));
-    for(let exportName of Object.values(exportNames)) {
-        exportsObj[exportName] = async function() {
-            let loadedExports = await exportsPromise;
-            return loadedExports[exportName](...arguments);
-        };
     }
 
     if (compilationCacheKey) {

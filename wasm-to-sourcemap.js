@@ -57,8 +57,9 @@ function getLineAfter(dwarfInfo) {
         return "";
     return lines[line - 1];
 }
-function logAbbrevInst(abbrev) {
-    process.stdout.write(abbrev.tag);
+
+function logAbbrevInst(abbrev, indent = "    ", curIndent = "", abbrevLookup = Object.create(null)) {
+    process.stdout.write(curIndent + abbrev.tag);
     if (abbrev.hasChildren) {
         process.stdout.write(" (has children)");
     }
@@ -72,22 +73,41 @@ function logAbbrevInst(abbrev) {
         if (att.name === "DW_AT_decl_file") {
             attAsStr = abbrev.filePaths[att.formValue - 1] || attAsStr;
         }
-        process.stdout.write(`  ${att.name} (${attAsStr}) [${att.formName}]\n`);
+        process.stdout.write(`${curIndent}| ${att.name} (${attAsStr}) [${att.formName}]\n`);
+
+        if(att.formName.startsWith("DW_FORM_ref")) {
+            let refAbbrev = abbrevLookup[att.formValue + 1];
+            if(refAbbrev) {
+                logAbbrevInst(refAbbrev, indent, curIndent + indent, abbrevLookup);
+            }
+        }
     }
     process.stdout.write("\n");
+
+    for(let childAbbrev of abbrev.children) {
+        logAbbrevInst(childAbbrev, indent, curIndent + indent, abbrevLookup);
+    }
 }
+module.exports.getDwarfAbbrevs = getDwarfAbbrevs;
 function getDwarfAbbrevs(sections) {
     let nameValueSections = getNameValueSections(sections);
-    // WebAssembly.Module.customSections(".debug_line") would also work, but it requires compiling the web assembly... which is
-    //  an incredible amount of overkill for such a simple thing...
-    let codeSection = Object.values(sections).filter(x => x.sectionId === 10)[0];
-    let dwarfSections = getDwarfSections(nameValueSections[".debug_line"], codeSection.offset);
-    let filePaths = dwarfSections[0].fullFilePaths;
+
+    let filePaths = [];
+    {
+        let codeSection = Object.values(sections).filter(x => x.sectionId === 10)[0];
+        if(nameValueSections[".debug_line"]) {
+            let dwarfSections = getDwarfSections(nameValueSections[".debug_line"], codeSection.offset);
+            filePaths = dwarfSections[0].fullFilePaths;
+        }
+    }
     // #region Implementation
     let debugStrings = [];
     function parseCStringAt(offset) {
         let pos = offset;
         let buffer = nameValueSections[".debug_str"];
+        if(!buffer) {
+            return `(string at offset ${offset})`;
+        }
         let str = "";
         while (pos < buffer.length) {
             let ch = buffer[pos++];
@@ -100,7 +120,7 @@ function getDwarfAbbrevs(sections) {
     {
         curIndex = 0;
         curBuffer = nameValueSections[".debug_str"];
-        while (curIndex < curBuffer.length) {
+        while (curBuffer && curIndex < curBuffer.length) {
             debugStrings.push(parseCString());
         }
     }
@@ -355,7 +375,7 @@ function getDwarfAbbrevs(sections) {
         [0x8b]: "DW_AT_defaulted",
         [0x8c]: "DW_AT_loclists_base",
     };
-    let abbrevs = {};
+    let abbrevs = Object.create(null);
     {
         curIndex = 0;
         curBuffer = nameValueSections[".debug_abbrev"];
@@ -366,6 +386,7 @@ function getDwarfAbbrevs(sections) {
                 break;
             let tag = parseLeb128();
             let hasChildren = !!curBuffer[curIndex++];
+
             // When we find null we go back up to the parent.
             let abbrev = { code, tag: getDwTagName(tag), attributes: [], hasChildren };
             while (true) {
@@ -417,51 +438,69 @@ function getDwarfAbbrevs(sections) {
     let addr_size = parseNum(1, false, true);
     //console.log({unit_length, version, debug_abbrev_offset, addr_size});
     //process.stdout.write("\n");
+
+    let abbrevLookup = Object.create(null);
+
+    function parseAbbrevList() {
+        let abbrevInsts = [];
+        while (curIndex < curBuffer.length) {
+            let code = parseLeb128();
+            // Done list of children
+            if (code === 0) {
+                break;
+            }
+            // Attribute values
+            if (!(code in abbrevs)) {
+                console.error(`Unknown code ${code.toString(16)}`);
+                break;
+            }
+            let info = abbrevs[code];
+            let abbrevPos = curIndex;
+            let infoObj = instantiateAbbrev(info);
+            abbrevLookup[abbrevPos] = infoObj;
+            abbrevInsts.push(infoObj);
+            if(infoObj.hasChildren) {
+                infoObj.children = parseAbbrevList();
+            } else {
+                infoObj.children = [];
+            }
+        }
+        return abbrevInsts;
+    }
+
     let abbrevInsts = [];
     while (curIndex < curBuffer.length) {
-        let code = parseLeb128();
-        //console.log({code});
-        // Hmm... if code === 0
-        if (code === 0) {
-            //process.stdout.write("  NULL\n\n");
-            continue;
-        }
-        // Attribute values
-        if (!(code in abbrevs)) {
-            console.error(`Unknown code ${code.toString(16)}`);
-            break;
-        }
-        let info = abbrevs[code];
-        let infoObj = instantiateAbbrev(info);
-        abbrevInsts.push(infoObj);
-        //logAbbrevInst(infoObj);
+        abbrevInsts = abbrevInsts.concat(parseAbbrevList());
     }
-    return abbrevInsts;
+    return {instances: abbrevInsts, lookup: abbrevLookup };
 }
 // https://stackoverflow.com/questions/9781218/how-to-change-node-jss-console-font-color
 function colorize(color, text) {
     return `\x1b[${color}m${text}\x1b[0m`;
 }
-function getExportNames(sections) {
-    let exportSection = Object.values(sections).filter(x => x.sectionId === 7)[0];
-    let exportedFunctions = {};
-    curIndex = 0;
-    curBuffer = exportSection.contents;
-    let functionCount = parseLeb128();
-    while (curIndex < curBuffer.length) {
-        let nameLength = parseLeb128();
-        let nameBytes = curBuffer.slice(curIndex, curIndex + nameLength);
-        curIndex += nameLength;
-        let name = Array.from(nameBytes).map(x => String.fromCharCode(x)).join("");
-        let exportType = parseLeb128();
-        let exportValue = parseLeb128();
-        if (exportType === 0) {
-            exportedFunctions[exportValue] = name;
+function getExportNames(sections, pickExportType = 0) {
+    let exportSections = Object.values(sections).filter(x => x.sectionId === 7);
+    let exportedFunctions = Object.create(null);
+    for(let exportSection of exportSections) {
+        curIndex = 0;
+        curBuffer = exportSection.contents;
+        let functionCount = parseLeb128();
+        while (curIndex < curBuffer.length) {
+            let nameLength = parseLeb128();
+            let nameBytes = curBuffer.slice(curIndex, curIndex + nameLength);
+            curIndex += nameLength;
+            let name = Array.from(nameBytes).map(x => String.fromCharCode(x)).join("");
+            let exportType = parseLeb128();
+            let exportValue = parseLeb128();
+            if (exportType === pickExportType) {
+                exportedFunctions[exportValue] = name;
+            }
         }
     }
     return exportedFunctions;
 }
-function getFunctionWasts(sections) {
+
+function parseExpression(exportedFunctions) {
     let instructionLengths = {
         // unreachable
         [0x00]: createParseFixedLength("unreachable", 0),
@@ -638,52 +677,70 @@ function getFunctionWasts(sections) {
         [0xBE]: createParseFixedLength("f32.reinterpret_i32", 0),
         [0xBF]: createParseFixedLength("f64.reinterpret_i64", 0),
     };
-    let exportedFunctions = getExportNames(sections);
-    let codeSection = Object.values(sections).filter(x => x.sectionId === 10)[0];
+
+    let wasts = [];
+
+    // Byte length of current expression
+    let startIndex = curIndex;
+    let len = parseLeb128();
+    let endIndex = curIndex + len;
+    let functionName = exportedFunctions[++fncIndex] || "???";
+    let declarationCount = parseLeb128();
+    for (let i = 0; i < declarationCount; i++) {
+        let countOfValue = parseLeb128();
+        let valueType = parseLeb128();
+    }
+    // Parse instructions
+    while (curIndex < endIndex) {
+        let wasmByteOffset = curIndex;
+        let code = curBuffer[curIndex++];
+        if (code === undefined) {
+            throw new Error(`Did not find return in function?`);
+        }
+        if (!(code in instructionLengths)) {
+            console.error(`!!! Unhandled instruction ${code}`);
+            curIndex--;
+            logRemaining();
+            break;
+        }
+        let wast = instructionLengths[code]();
+        wasts.push({
+            wasmByteOffset,
+            wast,
+            functionName,
+            functionIndex: fncIndex - 1,
+            instructionLength: curIndex - wasmByteOffset
+        });
+    }
+
+    if (curIndex !== endIndex) {
+        console.error(`!!! Invalid read, read to ${curIndex}, should have read to ${endIndex}`);
+    }
+    curIndex = endIndex;
+
+    return wasts;
+}
+
+function getWasts(wasmCodeBuffer, exportedFunctions) {
     curIndex = 0;
-    curBuffer = codeSection.contents;
+    curBuffer = wasmCodeBuffer;
     let functionCount = parseLeb128();
     let wasts = [];
     let fncIndex = 0;
     while (curIndex < curBuffer.length) {
-        // Byte length of current expression
-        let startIndex = curIndex;
-        let len = parseLeb128();
-        let endIndex = curIndex + len;
-        let functionName = exportedFunctions[++fncIndex] || "???";
-        let declarationCount = parseLeb128();
-        for (let i = 0; i < declarationCount; i++) {
-            let countOfValue = parseLeb128();
-            let valueType = parseLeb128();
+        for(let wast of parseExpression(exportedFunctions)) {
+            wasts.push(wast);
         }
-        let instructions = [];
-        // Parse instructions
-        while (curIndex < endIndex) {
-            let wasmByteOffset = curIndex;
-            let code = curBuffer[curIndex++];
-            if (code === undefined) {
-                throw new Error(`Did not find return in function?`);
-            }
-            if (!(code in instructionLengths)) {
-                console.error(`!!! Unhandled instruction ${code}`);
-                curIndex--;
-                logRemaining();
-                break;
-            }
-            let wast = instructionLengths[code]();
-            instructions.push(wast);
-            wasts.push({
-                wasmByteOffset,
-                wast,
-                functionName,
-                functionIndex: fncIndex - 1,
-                instructionLength: curIndex - wasmByteOffset
-            });
-        }
-        if (curIndex !== endIndex) {
-            console.error(`!!! Invalid read, read to ${curIndex}, should have read to ${endIndex}`);
-        }
-        curIndex = endIndex;
+    }
+    return wasts;
+}
+
+function getFunctionWasts(sections) {
+    let exportedFunctions = getExportNames(sections);
+    let wasts = [];
+    let codeSections = Object.values(sections).filter(x => x.sectionId === 10);
+    for(let codeSection of codeSections) {
+        wasts = wasts.concat(getWasts(codeSection, exportedFunctions));
     }
     return wasts;
 }
@@ -747,6 +804,22 @@ module.exports.removeDwarfSection = removeDwarfSection;
 function removeDwarfSection(wasmFile) {
     let sections = getSections(wasmFile);
     sections = sections.filter(x => getNameOfSection(x).name !== ".debug_line");
+    return joinSections(sections);
+}
+
+module.exports.copyRequireDwarfSections = copyRequireDwarfSections;
+function copyRequireDwarfSections(wasmFileWithDwarf, wasmFileWithoutDwarf) {
+    let dwarfSections = getSections(wasmFileWithDwarf);
+    // debug_str is used to get the function names, which is fine.
+    //  We aren't removing sections to reduce the size, we are doing it as the DWARF info is somewhat incorrect when mapped from a debug
+    //  build to a release build, and we don't want to be generated wholly inaccurate files that will confuse people.
+    let sectionsToMove = [".debug_info", ".debug_abbrev", ".debug_str"];
+    dwarfSections = dwarfSections.filter(x => sectionsToMove.includes(getNameOfSection(x).name));
+
+    let sections = getSections(wasmFileWithoutDwarf);
+    sections = sections.filter(x => !sectionsToMove.includes(getNameOfSection(x).name));
+    sections = sections.concat(dwarfSections);
+
     return joinSections(sections);
 }
 
@@ -850,6 +923,13 @@ function getSections(file) {
     return sections;
 }
 function joinSections(sections) {
+    sections.sort((a, b) => {
+        a = a.sectionId;
+        b = b.sectionId;
+        if(a === 0) a = Number.MAX_SAFE_INTEGER;
+        if(b === 0) b = Number.MAX_SAFE_INTEGER;
+        return a - b;
+    });
     let buffers = [];
     for (let section of sections) {
         if (section.sectionId === -1) {
@@ -1416,22 +1496,476 @@ function parseDwarfSection(dwarfSection) {
     }
     return matrix;
 }
-if (process.argv[1].endsWith("wasm-to-sourcemap.js")) {
+
+
+module.exports.getWasmMemoryExports = getWasmMemoryExports;
+function getWasmMemoryExports(wasmFile) {
+    let sections = getSections(wasmFile);
+
+    let memoryLayout = Object.create(null);
+
+    let dataSections = sections.filter(x => x.sectionId === 11);
+    for(let dataSection of dataSections) {
+        curIndex = 0;
+        curBuffer = dataSection.contents;
+
+        let count = parseLeb128();
+        while(curIndex < curBuffer.length) {
+            let memidx = parseLeb128();
+
+            let expressionType = curBuffer[curIndex++];
+            // Only expect i32.const values here, as this is the location in memory of the export.
+            if(expressionType !== 0x41) {
+                throw new Error(`Unexpected expression in globals ${expressionType.toString(16)}`);
+            }
+            let memoryLocation = parseLeb128();
+            let endOpcode = parseLeb128();
+            if(endOpcode !== 0x0b) {
+                throw new Error(`Globals has an expression longer than expected. I haven't seen this before, and this will require more complicated parsed to get the memory location of the global exports`);
+            }
+
+            let memorySize = parseLeb128();
+            curIndex += memorySize;
+
+            memoryLayout[memoryLocation] = "data";
+        }
+    }
+
+    let globalSections = sections.filter(x => x.sectionId === 6);
+    for(let globalSection of globalSections) {
+        curIndex = 0;
+        curBuffer = globalSection.contents;
+
+        let globalIndex = 0;
+
+        let globalCount = parseLeb128();
+        while (curIndex < curBuffer.length) {
+            let valueType = curBuffer[curIndex++];
+            if(valueType !== 0x7f) {
+                // I've only seen 0x7f, i32. 0x7e is 64 bit, and 0x7d and 0x7c are floats.
+                //  It looks like the type here is independent of the types used in the program, so we can't use this type for anything.
+                //  (I got i32 for floats, doubles and ints)
+            }
+            let mutability = curBuffer[curIndex++];
+
+            let expressionType = curBuffer[curIndex++];
+            // Only expect i32.const values here, as this is the location in memory of the export.
+            if(expressionType !== 0x41) {
+                throw new Error(`Unexpected expression in globals ${expressionType.toString(16)}`);
+            }
+            let memoryLocation = parseLeb128();
+            let endOpcode = parseLeb128();
+            if(endOpcode !== 0x0b) {
+                throw new Error(`Globals has an expression longer than expected. I haven't seen this before, and this will require more complicated parsed to get the memory location of the global exports`);
+            }
+
+            memoryLayout[memoryLocation] = globalIndex;
+
+            globalIndex++;
+        }
+    }
+
+    let layoutSizes = [];
+    let memorySorted = Object.keys(memoryLayout).map(x => +x);
+    memorySorted.sort();
+    for(let i = 0; i < memorySorted.length - 1; i++) {
+        let address = memorySorted[i];
+        let globalIndex = memoryLayout[address];
+        if(typeof globalIndex !== "number") continue;
+        let size = memorySorted[i + 1] - address;
+        layoutSizes.push({
+            size,
+            address,
+            globalIndex
+        });
+    }
+
+    let memoryLookup = Object.create(null);
+
+    let exportNames = getExportNames(sections, 3);
+    for(let sizeObj of layoutSizes) {
+        let name = exportNames[sizeObj.globalIndex];
+        if(name === undefined || name.startsWith("__")) continue;
+        memoryLookup[name] = { size: sizeObj.size, address: sizeObj.address };
+    }
+
+    return memoryLookup;
+}
+
+
+module.exports.getWasmFunctionExports = getWasmFunctionExports;
+function getWasmFunctionExports(wasmFile) {
+    // TODO: Actually just use getExportNames, and then augment it with DWARF info if it exists, that way
+    //  this code will mostly work with just a WASM file.
+
+    let functionExports = [];
+
+    let sections = getSections(wasmFile);
+
+    let { instances, lookup } = getDwarfAbbrevs(sections);
+
+    let elemEntries = getElemEntries(wasmFile);
+    let elemInvertLookup = Object.create(null);
+    for(let elemId in elemEntries) {
+        let fncId = elemEntries[elemId];
+        elemInvertLookup[fncId] = elemId;
+    }
+
+
+    function getAttValue(abbrev, attName) {
+        let att = abbrev.attributes.filter(x => x.name === attName)[0];
+        if(!att) return undefined;
+        return att.formValue;
+    }
+
+    function unwrapAtType(abbrev) {
+        return lookup[getAttValue(abbrev, "DW_AT_type") + 1];
+    }
+    function getType(abbrev) {
+        let baseType = unwrapAtType(abbrev);
+
+        if(!baseType) {
+            return undefined;
+        }
+
+        let typeName = getAttValue(baseType, "DW_AT_name");
+
+        if(baseType.tag === "DW_TAG_pointer_type") {
+            let result = getType(baseType);
+            if(result.subFunction) {
+                // Functions are pointers, but that doesn't mean they should really be pointers, it is just an irrelevant detail.
+                return result;
+            }
+
+            result.pointer = true;
+            result.typeName = typeName + "*";
+            result.type = "Buffer";
+            return result;
+        }
+        if(baseType.tag === "DW_TAG_subroutine_type") {
+            let returnType = getType(baseType);
+
+            let parameters = baseType.children
+                .filter(x => x.tag === "DW_TAG_formal_parameter")
+                .map(getType);
+
+            return {
+                type: `(${parameters.map(x => `${x.typeName}: ${x.type}`).join(", ")}) => ${returnType.type}`,
+                typeName,
+                subFunction: true,
+            };
+        }
+        if(baseType.tag === "DW_TAG_typedef") {
+            let result = getType(baseType);
+            result.typeName = typeName;
+            return result;
+        }
+
+
+        typeName = getAttValue(baseType, "DW_AT_name");
+
+        let encoding = getAttValue(baseType, "DW_AT_encoding");
+        let type = "any";
+        if(encoding === 0x01) type = "number";
+        if(encoding === 0x02) type = "boolean";
+        if(encoding === 0x03) type = "number";
+        if(encoding === 0x04) type = "number";
+        if(encoding === 0x05) type = "number";
+        if(encoding === 0x06) type = "number";
+        if(encoding === 0x07) type = "number";
+        if(encoding === 0x08) type = "number";
+        if(encoding === 0x09) type = "number";
+        if(encoding === 0x0a) type = "number";
+        if(encoding === 0x0b) type = "number";
+        if(encoding === 0x0c) type = "number";
+        if(encoding === 0x0d) type = "number";
+        if(encoding === 0x0e) type = "number";
+        if(encoding === 0x0f) type = "number";
+
+        if(type === "any") {
+            console.log("Can't get type for abbrev", { type, typeName });
+            logAbbrevInst(baseType, undefined, undefined, lookup);
+            logAbbrevInst(abbrev, undefined, undefined, lookup);
+        }
+
+        return { type, typeName };
+    }
+
+
+    let fncExportsInverted = getExportNames(sections);
+    let fncExports = Object.create(null);
+    for(let fncId in fncExportsInverted) {
+        let fncName = fncExportsInverted[fncId];
+        fncExports[fncName] = +fncId;
+    }
+
+    let externalAbbrevs = instances[0].children.filter(x => x.attributes.some(y => y.name === "DW_AT_external"));
+    for(let abbrev of externalAbbrevs) {
+        let name = getAttValue(abbrev, "DW_AT_name");
+        if(name.startsWith("SHIM_")) continue;
+        if(name.startsWith("INTERNAL_")) continue;
+        if(name === "__cxa_allocate_exception") continue;
+        if(name === "__cxa_throw") continue;
+        if(name === "memcpy") continue;
+        if(name === "memset") continue;
+
+        if(abbrev.tag === "DW_TAG_subprogram") {
+
+            let abbrevParams = abbrev.children.filter(x => x.tag === "DW_TAG_formal_parameter");
+
+            let javascriptTypeNames = abbrevParams.map(x => {
+                let name = getAttValue(x, "DW_AT_name");
+                let type = getType(x);
+                return { name, type };
+            });
+
+            let returnType = getType(abbrev) || { type: "void", typeName: undefined };
+
+            if(!(name in fncExports)) {
+                let possibleName = Object.keys(fncExports).filter(x => x.includes(name))[0];
+                
+                let warning = "";
+                if(possibleName) {
+                    warning = `DWARF info has function which does not exist in exports. It looks like you forgot to wrap your functions, like so:  extern "C" { int fnc() { return 5 } }  . Name in DWARF was ${name}, found similar export called ${possibleName}`;
+                } else {
+                    warning = `DWARF info has function which does not exist in exports. Perhaps you forgot to wrap your functions, like so:  extern "C" { int fnc() { return 5 } }  . Name in DWARF was ${name}`;
+                }
+                functionExports.push({ warning });
+            } else {
+                //line = `export declare function ${name}(${javascriptTypeNames}): ${returnType};`;
+                let fncId = fncExports[name];
+                let fncObj = { name, javascriptTypeNames, returnType, fncId };
+                if(fncId in elemInvertLookup) {
+                    fncObj.elemId = elemInvertLookup[fncId];
+                }
+                functionExports.push(fncObj);
+            }
+        }
+        // TODO: Do something like this in getWasmMemoryExports, to add better type information (to get the actual array type, at least for commenting purposes)
+        /* else if(abbrev.tag === "DW_TAG_variable") {
+
+            let typeString = "any";
+
+            line = `export declare const ${name}: ${typeString};`;
+        }*/
+    }
+
+    return functionExports;
+}
+
+
+function getElemEntries(wasmFile) {
+    let sections = getSections(wasmFile);
+
+    let elementLookup = Object.create(null);
+
+    let elementSections = sections.filter(x => x.sectionId === 9);
+    for(let elemSection of elementSections) {
+        curIndex = 0;
+        curBuffer = elemSection.contents;
+
+        let count = parseLeb128();
+        while(curIndex < curBuffer.length) {
+            let tableidx = parseLeb128();
+
+            let expressionType = curBuffer[curIndex++];
+            // Only expect i32.const values here, as this is the location in memory of the export.
+            if(expressionType !== 0x41) {
+                throw new Error(`Unexpected expression in globals ${expressionType.toString(16)}`);
+            }
+            let tableOffset = parseLeb128();
+            let endOpcode = parseLeb128();
+            if(endOpcode !== 0x0b) {
+                throw new Error(`Globals has an expression longer than expected. I haven't seen this before, and this will require more complicated parsed to get the memory location of the global exports`);
+            }
+
+            let fncCount = parseLeb128();
+
+            for(let i = 0; i < fncCount; i++) {
+                let tableIndex = tableOffset + i;
+                let fncidx = parseLeb128();
+                elementLookup[tableIndex] = fncidx;
+            }
+        }
+    }
+
+    return elementLookup;
+}
+
+function setElemEntries(wasmFile, entries) {
+    let sections = getSections(wasmFile);
+
+    let oldEntries = getElemEntries(wasmFile);
+    //entries = oldEntries;
+
+    sections = sections.filter(x => x.sectionId !== 9);
+
+    let elemKVPs = [];
+    for(let elemId in entries) {
+        elemKVPs.push({ elemId: +elemId, fncId: entries[elemId] });
+    }
+    // These need to be sorted
+    elemKVPs.sort((a, b) => a.elemId - b.elemId);
+
+    if(elemKVPs.length === 0) {
+        return wasmFile;
+    }
+
+    //elemKVPs = elemKVPs.slice(0, 3);
+
+    let entryBuffers = [];
+    /*
+    for(let { elemId, fncId } of elemKVPs) {
+        entryBuffers.push(Buffer.concat([
+            leb128Encode(0),
+            Buffer.from([0x41]),
+            leb128Encode(elemId),
+            Buffer.from([0x0b]),
+            leb128Encode(1),
+            leb128Encode(fncId)
+        ]));
+    }
+    //*/
+
+    // We could also emit it using the list style that elem supports, but... why?
+    //*
+    entryBuffers.push(Buffer.concat([
+        leb128Encode(0),
+        Buffer.from([0x41]),
+        leb128Encode(elemKVPs[0].elemId),
+        Buffer.from([0x0b]),
+        leb128Encode(elemKVPs.length),
+        ...elemKVPs.map(x => leb128Encode(x.fncId))
+    ]));
+    //*/
+
+
+    let elemSection = Buffer.concat([
+        leb128Encode(entryBuffers.length),
+        ...entryBuffers
+    ]);
+
+    sections.push({ sectionId: 9, contents: elemSection });
+
+    // There should be exactly one table, one one table section
+    let table = sections.filter(x => x.sectionId === 4)[0];
+    {
+        curIndex = 0;
+        curBuffer = table.contents;
+
+        if(curBuffer[curIndex] !== 1) {
+            throw new Error(`More tables than expected. Expected 1, found ${curBuffer[curIndex]}`);
+        }
+        curIndex++;
+        // Constant here
+        curIndex++;
+
+        let deltaTableSize = elemKVPs.length - Object.keys(oldEntries).length;
+
+        let limitsType = curBuffer[curIndex++];
+        if(limitsType === 0) {
+            let min = curBuffer[curIndex++];
+            min += deltaTableSize;
+            table.contents = Buffer.concat([Buffer.from([0x00, 0x70, 0x01]), leb128Encode(min)]);
+        }
+        else if(limitsType === 1) {
+            let min = curBuffer[curIndex++];
+            let max = curBuffer[curIndex++];
+            min += deltaTableSize;
+            max += deltaTableSize;
+            table.contents = Buffer.concat([Buffer.from([0x01, 0x70, 0x01]), leb128Encode(min), leb128Encode(max)]);
+        }
+    }
+
+    return joinSections(sections);
+}
+
+module.exports.elemAllFunctions = elemAllFunctions;
+function elemAllFunctions(wasmFile) {
+    let fncExports = getWasmFunctionExports(wasmFile);
+    let elemEntries = getElemEntries(wasmFile);
+
+    let nextElemIndex = Object.keys(elemEntries).map(x => +x).reduce((x, y) => Math.max(x, y), 0) + 1;
+
+    let elemInvertLookup = Object.create(null);
+    for(let elemId in elemEntries) {
+        let fncId = elemEntries[elemId];
+        elemInvertLookup[fncId] = elemId;
+    }
+
+    for(let fncObj of fncExports) {
+        if(fncObj.fncId in elemInvertLookup) continue;
+        elemEntries[nextElemIndex++] = fncObj.fncId;
+    }
+
+    //return wasmFile;
+    return setElemEntries(wasmFile, elemEntries);
+}
+
+
+
+if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1].endsWith("wasm-to-sourcemap.js")) {
+    let wasmPath = process.argv[2];
+    console.log(wasmPath);
+    let wasmFile = fs.readFileSync(wasmPath);
+    //console.log(generateTypingsFile(wasmFile));
+
+    
+
+    console.log(getWasmFunctionExports(wasmFile).filter(x => x.name === "returnCallFnc")[0]);
+
+    //let sections = getSections(wasmFile);
+    //console.log(sections.map(x => x.sectionId + " " + x.contents.length));
+    //let nameValueSections = getNameValueSections(sections);
+
+
+    /*
+    console.log(getElemEntries(wasmFile))
+
+    //wasmFile = elemAllFunctions(wasmFile);
+    let newWasmFile = setElemEntries(wasmFile, getElemEntries(wasmFile));
+    console.log(getElemEntries(wasmFile));
+
+    if(wasmFile.length !== newWasmFile.length) {
+        throw new Error(`Length wrong, should be ${wasmFile.length}, was ${newWasmFile.length}`);
+    }
+
+    for(let i = 0; i < wasmFile.length; i++) {
+        let r = wasmFile[i];
+        let w = newWasmFile[i];
+
+        if(r !== w) {
+            throw new Error(`At index ${i}, right ${r}, wrong ${w}`);
+        }
+    }
+    */
+
+
+    
+
+    process.exit();
+
     (async () => {
         // TODO: Create a proper CLI
+        //*
         let wasmPath = process.argv[2];
         console.log(wasmPath);
         let wasmFile = fs.readFileSync(wasmPath);
         let sections = getSections(wasmFile);
-        console.log(sections.map(x => x.sectionId + " " + x.contents.length));
+        //console.log(sections.map(x => x.sectionId + " " + x.contents.length));
         let nameValueSections = getNameValueSections(sections);
         let codeSection = Object.values(sections).filter(x => x.sectionId === 10)[0];
         let exportSection = Object.values(sections).filter(x => x.sectionId === 7)[0];
-        console.log(mapObjectValues(nameValueSections, x => x.length));
-        console.log(nameValueSections["sourceMappingURL"]);
+        //console.log(mapObjectValues(nameValueSections, x => x.length));
+        //console.log(nameValueSections["sourceMappingURL"]);
         let wasts = getFunctionWasts(sections);
         wasts.forEach(debugWastEntry);
-        /*
+        //*/
+
+        //*
+
+        console.log(Object.keys(nameValueSections));
+
         let dwarfSections = getDwarfSections(
             nameValueSections[".debug_line"],
             codeSection.offset
@@ -1442,39 +1976,24 @@ if (process.argv[1].endsWith("wasm-to-sourcemap.js")) {
         dwarfSections.forEach(x => { console.log(x.fullFilePaths); });
         
         
-        console.log(chalk.hsl(190, 100, 70)("WAST"));
+        //console.log("WAST");
         
-        wasts.filter(x => x.wasmByteOffset >= 0xd9 && x.wasmByteOffset <= 0x120).forEach(debugWastEntry);
+        //wasts.filter(x => x.wasmByteOffset >= 0xd9 && x.wasmByteOffset <= 0x120).forEach(debugWastEntry);
         console.log();
         
 
-        console.log(chalk.hsl(190, 100, 70)(".debug_line"));
+        console.log(".debug_line");
         let infos = parseDwarfSection(dwarfSections[0]);
         infos
-            .filter(x => x.address >= 0xd9 && x.address <= 0x120)
-            .forEach(x => { debugLogEntry(x); console.log("\t" + getLineAfter(x)); });
+            //.filter(x => x.address >= 0xd9 && x.address <= 0x120)
+            //.forEach(x => { debugLogEntry(x); console.log("\t" + getLineAfter(x)); });
         console.log();
         
-        console.log(chalk.hsl(190, 100, 70)(".debug_info"));
-        let abbrevs = getDwarfAbbrevs(sections);
-        let i = 0;
-        while(i < abbrevs.length) {
-            if(abbrevs[i].tag === `DW_TAG_subprogram`) {
-                let att = abbrevs[i].attributes.filter(x => x.name === `DW_AT_linkage_name`)[0];
-                if(att && (att.formValue as string).includes("setError")) {
-                    break;
-                }
-            }
-            i++;
+        console.log(".debug_info");
+        let { instances, lookup } = getDwarfAbbrevs(sections);
+
+        for(let abbrev of instances) {
+            logAbbrevInst(abbrev, undefined, undefined, lookup);
         }
-        while(i < abbrevs.length) {
-            logAbbrevInst(abbrevs[i]);
-            i++;
-            if(abbrevs[i].tag === `DW_TAG_subprogram`) {
-                break;
-            }
-        }
-        console.log();
-        */
     })();
 }

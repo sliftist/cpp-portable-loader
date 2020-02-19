@@ -46,11 +46,11 @@ template<> class IsFloat<float> : public BoolTrue { };
 template<> class IsFloat<double> : public BoolTrue { };
 
 extern "C" {
-    void throwCurrentError();
+    void SHIM__throwCurrentError();
 }
 
 ExportedArray(lastErrorStringForShim, unsigned char, 1024);
-void setError(const char* message) {
+void INTERNAL_setError(const char* message) {
     int length = 0;
     while(message[length] != '\0') {
         length++;
@@ -63,12 +63,12 @@ void setError(const char* message) {
         lastErrorStringForShim[i + 1] = message[i];
     }
     // TODO: How do we trigger a trap? Because... webassembly supports them, I'm just not sure how to trigger it from C++...
-    throwCurrentError();
+    SHIM__throwCurrentError();
 }
 extern "C" {
     void* __cxa_allocate_exception(unsigned int thrown_size) {
         if(thrown_size + 1 > sizeof(lastErrorStringForShim)) {
-			setError("Exception is larger than max size for exceptions");
+			INTERNAL_setError("Exception is larger than max size for exceptions");
 			return nullptr;
         }
         return lastErrorStringForShim;
@@ -76,7 +76,7 @@ extern "C" {
     void __cxa_throw(void* thrown_object, void* type, void(*dest)(void*)) {
         // TODO: Type and dest are both nullptr, so... how can we know if thrown_object is not a string?
         //      Maybe I am wrong and they have values... but... I don't think so... my debugger is basically broken though.
-        setError(*((const char**)thrown_object));
+        INTERNAL_setError(*((const char**)thrown_object));
     }
 }
 
