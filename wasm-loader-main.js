@@ -48,7 +48,7 @@ module.exports.transform = async function() {
     let options = loaderUtils.getOptions(this);
 
     let debugBuild = ((this.mode === "development" || options.forceDebug) && !options.forceRelease);
-    debugBuild = false;
+    //debugBuild = false;
 
 
     let wasmCompilerUrl = loaderUtils.stringifyRequest(this, require.resolve("./wasm-compiler.js"));
