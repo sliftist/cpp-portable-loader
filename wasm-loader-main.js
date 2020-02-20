@@ -5,6 +5,14 @@ const { compile } = require("./wasm-compiler");
 
 const { generateSourceMap, replaceSourceMapURL, removeDwarfSection, getWasmFunctionExports, getWasmMemoryExports, copyRequireDwarfSections, elemAllFunctions, getWasmImports, getTypedArrayCtorFromMemoryObj } = require("./wasm-to-sourcemap");
 
+// TODO:
+// Add flags for enabling/disabling:
+//  - shim functions
+//  - support passing function pointers
+//  - support passing buffers
+//  - support buffers before we load (as in copying the memory)
+//  - support buffers in general
+//  - emit .d.ts file
 
 const loaderUtils = require("loader-utils");
 
