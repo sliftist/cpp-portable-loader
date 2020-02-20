@@ -8,13 +8,18 @@
 // We should take our compilation from devserver to just webpack, so we can see if emitFile really does nothing? And if it does something...
 //  we should use it (maybe with loader-utils) to properly get a file path for our .wasm temp outputs.
 
-let { getWasmMemoryExports, getWasmFunctionExports } = require("./wasm-to-sourcemap");
+let { getWasmMemoryExports, getWasmFunctionExports, getWasmImports, getTypedArrayCtorFromMemoryObj } = require("./wasm-to-sourcemap");
 
 let g = Function('return this')();
 
 const DuplicateModule = module.exports.DuplicateModule = Symbol("NewModuleFnc");
 
 module.exports.CompileWasmFunctionsName = "CompileWasmFunctions";
+
+function isEmpty(obj) {
+    for(var key in obj) return false;
+    return true;
+}
 
 function leb128Parse(index, buffer) {
     let bytes = [];
@@ -94,7 +99,6 @@ function getExportNames(sections) {
     return exportedFunctions;
 }
 
-
 g.wasmCompilerCompileCache = g.wasmCompilerCompileCache || Object.create(null);
 module.exports.compile = function compile(webAssembly, compilationCacheKey, functionsForImports = Object.create(null)) {
     if (compilationCacheKey) {
@@ -102,6 +106,8 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
             return g.wasmCompilerCompileCache[compilationCacheKey];
         }
     }
+
+    let initializeWarningTimeout = 10 * 1000;
 
     const MemoryBufferAddress = Symbol("MemoryBufferAddress");
     const WasmFncObj = Symbol("WasmFncObj");
@@ -134,59 +140,119 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
         throw error;
     }
 
-    let moduleObjPromise = WebAssembly.instantiate(webAssembly, {
-        env: {
-            SHIM__throwCurrentError,
-            ... functionsForImports
-        },
-    });
+    
     /*
     let arrayObj = new Float64Array(baseExports.memory.buffer, offset, count);
     */
 
-    let memoryExports = getWasmMemoryExports(webAssembly);
-    for(let exportName in memoryExports) {
-        let { size, address } = memoryExports[exportName];
-        exportsObj[exportName] = Buffer.alloc(size);
-        exportsObj[exportName][MemoryBufferAddress] = address;
+    let importList = getWasmImports(webAssembly);
+
+    let dynamicFunctionsForImport;
+    let dynamicFunctionsForImportResolve;
+    let dynamicFunctionsResolved = false;
+
+    if(importList.length === 0) {
+        dynamicFunctionsForImport = Promise.resolve(Object.create(null));
+        dynamicFunctionsForImportResolve = function () {};
+        dynamicFunctionsResolved = true;
+    } else {
+        dynamicFunctionsForImport = new Promise(resolve => {
+            dynamicFunctionsForImportResolve = function(functions) {
+                if(dynamicFunctionsResolved) {
+                    return;
+                }
+                dynamicFunctionsResolved = true;
+                resolve(functions);
+            }
+        });
     }
 
-    let functionExports = undefined;
-    try {
-        functionExports = getWasmFunctionExports(webAssembly);
-    } catch(e) {}
-    if(functionExports) {
-        for(let fncExport of functionExports) {
-            if(fncExport.warning) continue;
+    let memoryBufferLookup = Object.create(null);
 
-            exportsObj[fncExport.name] = async function() {
-                let loadedExports = await exportsPromise;
-                return loadedExports[exportName](...arguments);
-            };
-            exportsObj[fncExport.name][WasmFncObj] = fncExport;
+    let memoryExports = getWasmMemoryExports(webAssembly);
+    for(let exportName in memoryExports) {
+        let memoryObj = memoryExports[exportName];
+        let { size, address } = memoryObj;
+        
+        exportsObj[exportName] = Buffer.alloc(size);
+
+        let TypedArrayCtor = getTypedArrayCtorFromMemoryObj(memoryObj);
+        if(TypedArrayCtor) {
+            exportsObj[exportName] = new TypedArrayCtor(exportsObj[exportName].buffer, exportsObj[exportName].byteOffset, Math.round(size / memoryObj.byteWidth));
+        }
+
+        exportsObj[exportName][MemoryBufferAddress] = address;
+        memoryBufferLookup[address] = exportsObj[exportName];
+    }
+
+    let functionExports = getWasmFunctionExports(webAssembly);
+    for(let fncExport of functionExports) {
+        if(fncExport.warning) continue;
+
+        exportsObj[fncExport.name] = async function() {
+            if(!dynamicFunctionsResolved) {
+                setTimeout(() => {
+                    if(!dynamicFunctionsResolved) {
+                        console.warn(`Failed to call CompileWasmFunctions within a timeout of calling function ${fncExport.name}. The function call won't resolve until CompileWasmFunctions is called.`);
+                    }
+                }, initializeWarningTimeout);
+            }
+            let loadedExports = await exportsPromise;
+            return loadedExports[exportName](...arguments);
+        };
+        exportsObj[fncExport.name][WasmFncObj] = fncExport;
+    }
+
+    let elemIdLookup = Object.create(null);
+    for(let fncExport of functionExports) {
+        if(fncExport.warning) continue;
+        if("elemId" in fncExport) {
+            elemIdLookup[fncExport.elemId] = fncExport;
         }
     }
 
 
+    let moduleObjPromise = dynamicFunctionsForImport.then(dynamicFunctions => {
+        return WebAssembly.instantiate(webAssembly, {
+            env: {
+                SHIM__throwCurrentError,
+                ... functionsForImports,
+                ... dynamicFunctions
+            },
+        })
+    });
+
+
     let exportsLoaded = false;
+
     // Once the module loads, update exportsObj to have the actual correct functions, and typed arrays.
     let exportsPromise = moduleObjPromise.then((moduleObj) => {
         let baseExports = moduleObj.instance.exports;
 
-        exportsObj["memory"] = Buffer.from(baseExports.memory.buffer);
-
-        let memoryBufferLookup = Object.create(null);
+        //exportsObj["memory"] = Buffer.from(baseExports.memory.buffer);
 
         for(let exportName in memoryExports) {
-            let { size, address } = memoryExports[exportName];
+            let memoryObj = memoryExports[exportName];
+            let { size, address } = memoryObj;
+
             let buffer = Buffer.from(baseExports.memory.buffer, address, size);
-            buffer.set(exportsObj[exportName]);
+            let source = exportsObj[exportName];
+            buffer.set(new Uint8Array(source.buffer, source.byteOffset));
+
             exportsObj[exportName] = buffer;
+
+            let TypedArrayCtor = getTypedArrayCtorFromMemoryObj(memoryObj);
+            if(TypedArrayCtor) {
+                exportsObj[exportName] = new TypedArrayCtor(exportsObj[exportName].buffer, exportsObj[exportName].byteOffset, Math.round(size / memoryObj.byteWidth));
+            }
+
             exportsObj[exportName][MemoryBufferAddress] = address;
-            memoryBufferLookup[address] = buffer;
+            memoryBufferLookup[address] = exportsObj[exportName];
         }
 
-        if(!functionExports) {
+        
+
+        if(isEmpty(functionExports)) {
             for(let name in baseExports)  {
                 let fnc = baseExports[name];
                 if(typeof fnc === "function") {
@@ -194,16 +260,6 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
                 }
             }
         } else {
-            console.log(functionExports);
-
-            let fncIdLookup = Object.create(null)
-            for(let fncExport of functionExports) {
-                if(fncExport.warning) continue;
-                if("elemId" in fncExport) {
-                    fncIdLookup[fncExport.elemId] = fncExport;
-                }
-            }
-
             for(let fncExport of functionExports) {
                 if(fncExport.warning) continue;
 
@@ -250,10 +306,10 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
                         }
                         if(fncExport.returnType.subFunction) {
                             let elemId = result;
-                            if(elemId in fncIdLookup) {
-                                return exportsObj[fncIdLookup[elemId].name];
+                            if(elemId in elemIdLookup) {
+                                return exportsObj[elemIdLookup[elemId].name];
                             } else {
-                                console.warn(`Returned element id (from a function that returns a function) that doesn't correspond to any element ids we know.`, fncExport, elemId, fncIdLookup);
+                                console.warn(`Returned element id (from a function that returns a function) that doesn't correspond to any element ids we know.`, fncExport, elemId, elemIdLookup);
                             }
                         }
 
@@ -270,16 +326,33 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
         console.error(e);
     });
 
-    exportsObj.CompileWasmFunctions = function CompileWasmFunctions() {
+    exportsObj.CompileWasmFunctions = function CompileWasmFunctions(functions) {
         if(exportsLoaded) {
             return exportsObj;
         }
+
+        dynamicFunctionsForImportResolve(functions);
 
         return exportsPromise;
     };
     exportsObj[DuplicateModule] = function () {
         return compile(webAssembly);
-    }
+    };
+
+    exportsObj.UtilGetBufferFromAddress = function(address) {
+        return memoryBufferLookup[address];
+    };
+    exportsObj.UtilGetAddressFromBuffer = function(buffer) {
+        return buffer[MemoryBufferAddress];
+    };
+    exportsObj.UtilGetFncFromArg = function(arg) {
+        return elemIdLookup[arg];
+    };
+    exportsObj.UtilGetArgFromFnc = function(wasmFnc) {
+        let fncObj = wasmFnc[WasmFncObj];
+        if(!fncObj) return undefined;
+        return exportsObj[fncObj.name];
+    };
 
     if (compilationCacheKey) {
         if (!(compilationCacheKey in g.wasmCompilerCompileCache)) {

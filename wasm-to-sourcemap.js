@@ -58,39 +58,57 @@ function getLineAfter(dwarfInfo) {
     return lines[line - 1];
 }
 
-function logAbbrevInst(abbrev, indent = "    ", curIndent = "", abbrevLookup = Object.create(null)) {
+function logAbbrevInst(abbrev, indent = "    ", curIndent = "", abbrevLookup = Object.create(null), childLimit = Number.MAX_SAFE_INTEGER) {
+    if(!process || !process.stdout) return;
+
     process.stdout.write(curIndent + abbrev.tag);
     if (abbrev.hasChildren) {
         process.stdout.write(" (has children)");
     }
     process.stdout.write(` (0x${abbrev.parsedAddress.toString(16)})`);
-    process.stdout.write("\n");
-    for (let att of abbrev.attributes) {
-        let attAsStr = typeof att.formValue === "object" ? JSON.stringify(att.formValue) : String(att.formValue);
-        if (att.formValue instanceof Buffer) {
-            attAsStr = `Buffer([${Array.from(att.formValue).map(x => x.toString(16)).join(", ")}])`;
-        }
-        if (att.name === "DW_AT_decl_file") {
-            attAsStr = abbrev.filePaths[att.formValue - 1] || attAsStr;
-        }
-        process.stdout.write(`${curIndent}| ${att.name} (${attAsStr}) [${att.formName}]\n`);
+    let nameAtt = abbrev.attributes.filter(x => x.name === "DW_AT_name")[0];
+    if(nameAtt) {
+        process.stdout.write(`(${nameAtt.formValue})`);
+    }
 
-        if(att.formName.startsWith("DW_FORM_ref")) {
-            let refAbbrev = abbrevLookup[att.formValue + 1];
-            if(refAbbrev) {
-                logAbbrevInst(refAbbrev, indent, curIndent + indent, abbrevLookup);
+    if(childLimit > 0) {
+        process.stdout.write("\n");
+        for (let att of abbrev.attributes) {
+            let attAsStr = typeof att.formValue === "object" ? JSON.stringify(att.formValue) : String(att.formValue);
+            if (att.formValue instanceof Buffer) {
+                attAsStr = `Buffer([${Array.from(att.formValue).map(x => x.toString(16)).join(", ")}])`;
+            }
+            if (att.name === "DW_AT_decl_file") {
+                attAsStr = abbrev.filePaths[att.formValue - 1] || attAsStr;
+            }
+            process.stdout.write(`${curIndent}| ${att.name} (${attAsStr}) [${att.formName}]\n`);
+
+            if(att.formName.startsWith("DW_FORM_ref")) {
+                let refAbbrev = abbrevLookup[att.formValue + 1];
+                if(refAbbrev) {
+                    logAbbrevInst(refAbbrev, indent, curIndent + indent, abbrevLookup, childLimit - 1);
+                }
             }
         }
     }
     process.stdout.write("\n");
 
-    for(let childAbbrev of abbrev.children) {
-        logAbbrevInst(childAbbrev, indent, curIndent + indent, abbrevLookup);
+    if(childLimit > 0) {
+        for(let childAbbrev of abbrev.children) {
+            logAbbrevInst(childAbbrev, indent, curIndent + indent, abbrevLookup, childLimit - 1);
+        }
     }
 }
 module.exports.getDwarfAbbrevs = getDwarfAbbrevs;
 function getDwarfAbbrevs(sections) {
     let nameValueSections = getNameValueSections(sections);
+
+    let requiredSectionNames = getRequiredSectionNames();
+    for(let sectionName of requiredSectionNames) {
+        if(!(sectionName in nameValueSections)) {
+            return { instances: [{children: []}], lookup: Object.create(null) };
+        }
+    }
 
     let filePaths = [];
     {
@@ -500,7 +518,7 @@ function getExportNames(sections, pickExportType = 0) {
     return exportedFunctions;
 }
 
-function parseExpression(exportedFunctions) {
+function parseExpression(exportedFunctions, fncIndex) {
     let instructionLengths = {
         // unreachable
         [0x00]: createParseFixedLength("unreachable", 0),
@@ -684,7 +702,7 @@ function parseExpression(exportedFunctions) {
     let startIndex = curIndex;
     let len = parseLeb128();
     let endIndex = curIndex + len;
-    let functionName = exportedFunctions[++fncIndex] || "???";
+    let functionName = exportedFunctions[fncIndex] || "???";
     let declarationCount = parseLeb128();
     for (let i = 0; i < declarationCount; i++) {
         let countOfValue = parseLeb128();
@@ -726,9 +744,9 @@ function getWasts(wasmCodeBuffer, exportedFunctions) {
     curBuffer = wasmCodeBuffer;
     let functionCount = parseLeb128();
     let wasts = [];
-    let fncIndex = 0;
+    let fncIndex = 1;
     while (curIndex < curBuffer.length) {
-        for(let wast of parseExpression(exportedFunctions)) {
+        for(let wast of parseExpression(exportedFunctions, fncIndex++)) {
             wasts.push(wast);
         }
     }
@@ -740,7 +758,7 @@ function getFunctionWasts(sections) {
     let wasts = [];
     let codeSections = Object.values(sections).filter(x => x.sectionId === 10);
     for(let codeSection of codeSections) {
-        wasts = wasts.concat(getWasts(codeSection, exportedFunctions));
+        wasts = wasts.concat(getWasts(codeSection.contents, exportedFunctions));
     }
     return wasts;
 }
@@ -807,13 +825,17 @@ function removeDwarfSection(wasmFile) {
     return joinSections(sections);
 }
 
-module.exports.copyRequireDwarfSections = copyRequireDwarfSections;
-function copyRequireDwarfSections(wasmFileWithDwarf, wasmFileWithoutDwarf) {
-    let dwarfSections = getSections(wasmFileWithDwarf);
+function getRequiredSectionNames() {
     // debug_str is used to get the function names, which is fine.
     //  We aren't removing sections to reduce the size, we are doing it as the DWARF info is somewhat incorrect when mapped from a debug
     //  build to a release build, and we don't want to be generated wholly inaccurate files that will confuse people.
-    let sectionsToMove = [".debug_info", ".debug_abbrev", ".debug_str"];
+    return [".debug_info", ".debug_abbrev", ".debug_str"];
+}
+
+module.exports.copyRequireDwarfSections = copyRequireDwarfSections;
+function copyRequireDwarfSections(wasmFileWithDwarf, wasmFileWithoutDwarf) {
+    let sectionsToMove = getRequiredSectionNames();
+    let dwarfSections = getSections(wasmFileWithDwarf);
     dwarfSections = dwarfSections.filter(x => sectionsToMove.includes(getNameOfSection(x).name));
 
     let sections = getSections(wasmFileWithoutDwarf);
@@ -1034,6 +1056,14 @@ function parseLeb128(signed = false) {
         }
     }
     return obj.value;
+}
+function parseVector(elemParse) {
+    let elements = [];
+    let count = parseLeb128();
+    for(let i = 0; i < count; i++) {
+        elements.push(elemParse());
+    }
+    return elements;
 }
 /** Returns absolute mappings. */
 function fullMappingStringToAbsoluteMappings(mappingStr, sources) {
@@ -1565,6 +1595,18 @@ function getWasmMemoryExports(wasmFile) {
         }
     }
 
+
+    let { instances, lookup } = getDwarfAbbrevs(sections);
+
+    let varAbbrevs = instances[0].children.filter(x => x.tag === "DW_TAG_variable");
+    let abbrevLookup = Object.create(null);
+
+    for(var varAbbrev of varAbbrevs) {
+        let name = getAttValue(varAbbrev, "DW_AT_name");
+        abbrevLookup[name] = varAbbrev;
+    }
+
+
     let layoutSizes = [];
     let memorySorted = Object.keys(memoryLayout).map(x => +x);
     memorySorted.sort();
@@ -1573,6 +1615,7 @@ function getWasmMemoryExports(wasmFile) {
         let globalIndex = memoryLayout[address];
         if(typeof globalIndex !== "number") continue;
         let size = memorySorted[i + 1] - address;
+
         layoutSizes.push({
             size,
             address,
@@ -1586,12 +1629,169 @@ function getWasmMemoryExports(wasmFile) {
     for(let sizeObj of layoutSizes) {
         let name = exportNames[sizeObj.globalIndex];
         if(name === undefined || name.startsWith("__")) continue;
-        memoryLookup[name] = { size: sizeObj.size, address: sizeObj.address };
+
+        let memoryObj = { size: sizeObj.size, address: sizeObj.address };
+
+        let abbrev = abbrevLookup[name];
+        if(abbrev) {
+            let abbrevObj = getAbbrevType(abbrev, lookup);
+            if(abbrevObj) {
+                if(abbrevObj.count) {
+                    memoryObj.size = abbrevObj.size;
+                    memoryObj.count = abbrevObj.count;
+                }
+                Object.assign(memoryObj, typeNameToSize(abbrevObj.typeName));
+                memoryObj.typeName = abbrevObj.typeName;
+            }
+        }
+
+        memoryLookup[name] = memoryObj;
     }
 
     return memoryLookup;
 }
 
+
+function getAttValue(abbrev, attName) {
+    let att = abbrev.attributes.filter(x => x.name === attName)[0];
+    if(!att) return undefined;
+    return att.formValue;
+}
+
+function typeNameToSize(typeName) {
+    let signed = true;
+    let float = false;
+    let byteWidth = 1;
+
+    typeName = typeName.split("*")[0];
+
+    if(typeName.startsWith("unsigned")) {
+        signed = false;
+        typeName = typeName.slice("unsigned ".length);
+    }
+
+    if(typeName === "char") {
+        byteWidth = 1;
+    } else if(typeName === "short") {
+        byteWidth = 2;
+    } else if(typeName === "int") {
+        byteWidth = 4;
+    } else if(typeName === "long int") {
+        byteWidth = 4;
+    } else if(typeName === "long long int") {
+        byteWidth = 8;
+    } else if(typeName === "float") {
+        byteWidth = 4;
+        float = true;
+    } else if(typeName === "double") {
+        byteWidth = 8;
+        float = true;
+    } else if(typeName === "long double") {
+        byteWidth = 16;
+        float = true;
+    } else {
+        console.log(`Unhandled type ${typeName}, assuming width is 4 bytes`);
+        byteWidth = 4;
+    }
+
+    return { signed, float, byteWidth };
+}
+
+function getAbbrevType(abbrev, lookup) {
+    function unwrapAtType(abbrev) {
+        return lookup[getAttValue(abbrev, "DW_AT_type") + 1];
+    }
+    
+    let baseType = unwrapAtType(abbrev);
+
+    if(!baseType) {
+        return undefined;
+    }
+
+    let typeName = getAttValue(baseType, "DW_AT_name");
+
+    if(baseType.tag === "DW_TAG_pointer_type" || baseType.tag === "DW_TAG_array_type") {
+        let result = getAbbrevType(baseType, lookup);
+        if(result.subFunction) {
+            // Functions are pointers, but that doesn't mean they should really be pointers, it is just an irrelevant detail.
+            return result;
+        }
+
+        typeName = typeName || result.typeName;
+
+        let subrangeAbbrev = baseType.children.filter(x => x.tag === "DW_TAG_subrange_type")[0];
+        if(subrangeAbbrev) {
+            let countValue = getAttValue(subrangeAbbrev, "DW_AT_count");
+            if(countValue) {
+                result.count = countValue;
+            }
+        }
+
+        let { signed, float, byteWidth } = typeNameToSize(typeName);
+        
+        if(result.count) {
+            result.size = byteWidth * result.count;
+        }
+
+        result.byteWidth = byteWidth;
+        result.signed = signed;
+        result.float = float;
+
+        result.pointer = true;
+        result.typeName = typeName + "*";
+        let typedArray = getTypedArrayCtorFromMemoryObj(result);
+        result.type = typedArray ? typedArray.name : "Buffer";
+
+        return result;
+    }
+    if(baseType.tag === "DW_TAG_subroutine_type") {
+        let returnType = getAbbrevType(baseType, lookup);
+
+        let parameters = baseType.children
+            .filter(x => x.tag === "DW_TAG_formal_parameter")
+            .map(x => getAbbrevType(x, lookup));
+
+        return {
+            type: `(${parameters.map(x => `${x.typeName}: ${x.type}`).join(", ")}) => ${returnType.type}`,
+            typeName,
+            subFunction: true,
+        };
+    }
+    if(baseType.tag === "DW_TAG_typedef") {
+        let result = getAbbrevType(baseType, lookup);
+        //result.typeName = typeName;
+        return result;
+    }
+
+
+    typeName = getAttValue(baseType, "DW_AT_name");
+
+    let encoding = getAttValue(baseType, "DW_AT_encoding");
+    let type = "any";
+    if(encoding === 0x01) type = "number";
+    if(encoding === 0x02) type = "boolean";
+    if(encoding === 0x03) type = "number";
+    if(encoding === 0x04) type = "number";
+    if(encoding === 0x05) type = "number";
+    if(encoding === 0x06) type = "number";
+    if(encoding === 0x07) type = "number";
+    if(encoding === 0x08) type = "number";
+    if(encoding === 0x09) type = "number";
+    if(encoding === 0x0a) type = "number";
+    if(encoding === 0x0b) type = "number";
+    if(encoding === 0x0c) type = "number";
+    if(encoding === 0x0d) type = "number";
+    if(encoding === 0x0e) type = "number";
+    if(encoding === 0x0f) type = "number";
+
+    if(type === "any") {
+        console.log("Can't get type for abbrev", { type, typeName });
+        logAbbrevInst(baseType, undefined, undefined, lookup);
+        logAbbrevInst(abbrev, undefined, undefined, lookup);
+    }
+
+    return { type, typeName };
+}
 
 module.exports.getWasmFunctionExports = getWasmFunctionExports;
 function getWasmFunctionExports(wasmFile) {
@@ -1611,85 +1811,6 @@ function getWasmFunctionExports(wasmFile) {
         elemInvertLookup[fncId] = elemId;
     }
 
-
-    function getAttValue(abbrev, attName) {
-        let att = abbrev.attributes.filter(x => x.name === attName)[0];
-        if(!att) return undefined;
-        return att.formValue;
-    }
-
-    function unwrapAtType(abbrev) {
-        return lookup[getAttValue(abbrev, "DW_AT_type") + 1];
-    }
-    function getType(abbrev) {
-        let baseType = unwrapAtType(abbrev);
-
-        if(!baseType) {
-            return undefined;
-        }
-
-        let typeName = getAttValue(baseType, "DW_AT_name");
-
-        if(baseType.tag === "DW_TAG_pointer_type") {
-            let result = getType(baseType);
-            if(result.subFunction) {
-                // Functions are pointers, but that doesn't mean they should really be pointers, it is just an irrelevant detail.
-                return result;
-            }
-
-            result.pointer = true;
-            result.typeName = typeName + "*";
-            result.type = "Buffer";
-            return result;
-        }
-        if(baseType.tag === "DW_TAG_subroutine_type") {
-            let returnType = getType(baseType);
-
-            let parameters = baseType.children
-                .filter(x => x.tag === "DW_TAG_formal_parameter")
-                .map(getType);
-
-            return {
-                type: `(${parameters.map(x => `${x.typeName}: ${x.type}`).join(", ")}) => ${returnType.type}`,
-                typeName,
-                subFunction: true,
-            };
-        }
-        if(baseType.tag === "DW_TAG_typedef") {
-            let result = getType(baseType);
-            result.typeName = typeName;
-            return result;
-        }
-
-
-        typeName = getAttValue(baseType, "DW_AT_name");
-
-        let encoding = getAttValue(baseType, "DW_AT_encoding");
-        let type = "any";
-        if(encoding === 0x01) type = "number";
-        if(encoding === 0x02) type = "boolean";
-        if(encoding === 0x03) type = "number";
-        if(encoding === 0x04) type = "number";
-        if(encoding === 0x05) type = "number";
-        if(encoding === 0x06) type = "number";
-        if(encoding === 0x07) type = "number";
-        if(encoding === 0x08) type = "number";
-        if(encoding === 0x09) type = "number";
-        if(encoding === 0x0a) type = "number";
-        if(encoding === 0x0b) type = "number";
-        if(encoding === 0x0c) type = "number";
-        if(encoding === 0x0d) type = "number";
-        if(encoding === 0x0e) type = "number";
-        if(encoding === 0x0f) type = "number";
-
-        if(type === "any") {
-            console.log("Can't get type for abbrev", { type, typeName });
-            logAbbrevInst(baseType, undefined, undefined, lookup);
-            logAbbrevInst(abbrev, undefined, undefined, lookup);
-        }
-
-        return { type, typeName };
-    }
 
 
     let fncExportsInverted = getExportNames(sections);
@@ -1715,11 +1836,11 @@ function getWasmFunctionExports(wasmFile) {
 
             let javascriptTypeNames = abbrevParams.map(x => {
                 let name = getAttValue(x, "DW_AT_name");
-                let type = getType(x);
+                let type = getAbbrevType(x, lookup);
                 return { name, type };
             });
 
-            let returnType = getType(abbrev) || { type: "void", typeName: undefined };
+            let returnType = getAbbrevType(abbrev, lookup) || { type: "void", typeName: undefined };
 
             if(!(name in fncExports)) {
                 let possibleName = Object.keys(fncExports).filter(x => x.includes(name))[0];
@@ -1904,15 +2025,184 @@ function elemAllFunctions(wasmFile) {
 
 
 
+function getImportsRaw(wasmFile, testImportDesc = 0) {
+    let sections = getSections(wasmFile);
+
+    let importLookup = Object.create(null);
+
+    let importSections = sections.filter(x => x.sectionId === 2);
+    for(let importSection of importSections) {
+        curIndex = 0;
+        curBuffer = importSection.contents;
+
+        let count = parseLeb128();
+        while(curIndex < curBuffer.length) {
+
+            let modName = parseVector(() => curBuffer[curIndex++]).map(x => String.fromCharCode(x)).join("");
+            let importName = parseVector(() => curBuffer[curIndex++]).map(x => String.fromCharCode(x)).join("");
+            
+            let importDesc = curBuffer[curIndex++];
+            let importId = parseLeb128();
+
+            if(importDesc === testImportDesc && modName === "env") {
+                importLookup[importName] = importId;
+            }
+        }
+    }
+
+    return importLookup;
+}
+
+
+function parseTypesSection(wasmFile) {
+    let types = [];
+
+    let sections = getSections(wasmFile);
+    let typesSections = sections.filter(x => x.sectionId === 1);
+    for(let typesSection of typesSections) {
+        curIndex = 0;
+        curBuffer = typesSection.contents;
+
+        let count = parseLeb128();
+        while(curIndex < curBuffer.length) {
+            let specialValue = curBuffer[curIndex++];
+            if(specialValue !== 0x60) {
+                throw new Error(`Expected 0x60 before function type, found ${specialValue}`);
+            }
+
+            let parameters = parseVector(() => curBuffer[curIndex++]);
+            let results = parseVector(() => curBuffer[curIndex++]);
+
+            types.push({
+                parameters,
+                results
+            });
+        }
+    }
+
+    return types;
+}
+
+module.exports.getWasmImports = getWasmImports;
+function getWasmImports(wasmFile) {
+    // TODO: Add argument names.
+    //  It doesn't appear as if the DWARF file has information on imports (they don't appear in the executable,
+    //      as they are externs, so there is not binary code to annotate? Or something?).
+    //  But, we can always run clang-query, and then... probably add our DWARF annotations (it is a flexible format,
+    //      I'm sure we can figure out some way to add it), and parse that ourself. It wouldn't be great,
+    //      but it would work.
+
+    let importsList = [];
+
+    let imports = getImportsRaw(wasmFile);
+    let types = parseTypesSection(wasmFile);
+
+    function formatTypeNum(typeNum, index, prefix) {
+        return {
+            name: prefix + index,
+            type: {
+                type: "number",
+                typeName: (
+                    typeNum === 0x7F ? "i32"
+                    : typeNum === 0x7E ? "i64"
+                    : typeNum === 0x7D ? "f32"
+                    : typeNum === 0x7C ? "f64"
+                    : `type_${typeNum}`
+                )
+            }
+        }
+    }
+
+    for(let importName in imports) {
+        if(importName.startsWith("SHIM__")) continue;
+
+        let type = types[imports[importName]];
+
+        // return { type, typeName };
+        // { name, type }
+
+        if(type.results.length > 1) {
+            throw new Error(`Import requires a function with multiple return types, but javascript does not support multiple return statements, so we can't satisify this import. ${importName}`);
+        }
+
+        let returnType = type.results.length === 0 ? { type: "void", typeName: undefined } : formatTypeNum(type.results[0], 0, "return").type;
+
+        importsList.push({
+            name: importName,
+            javascriptTypeNames: type.parameters.map((x, index) => formatTypeNum(x, index, "arg")),
+            returnType
+        });
+    }
+
+    return importsList;
+}
+
+module.exports.getTypedArrayCtorFromMemoryObj = getTypedArrayCtorFromMemoryObj;
+function getTypedArrayCtorFromMemoryObj(memoryObj) {
+    if(memoryObj.float) {
+        if(memoryObj.byteWidth === 4) {
+            return Float32Array;
+        } else if(memoryObj.byteWidth === 8) {
+            return Float64Array;
+        }
+    } else if(!memoryObj.signed) {
+        if(memoryObj.byteWidth === 1) {
+            return Uint8Array;
+        } else if(memoryObj.byteWidth === 2) {
+            return Uint16Array;
+        } else if(memoryObj.byteWidth === 4) {
+            return Uint32Array;
+        } else if(memoryObj.byteWidth === 8) {
+            return BigUint64Array;
+        }
+    } else {
+        if(memoryObj.byteWidth === 1) {
+            return Int8Array;
+        } else if(memoryObj.byteWidth === 2) {
+            return Int16Array;
+        } else if(memoryObj.byteWidth === 4) {
+            return Int32Array;
+        } else if(memoryObj.byteWidth === 8) {
+            return BigInt64Array;
+        }
+    }
+    return undefined;
+}
+
 if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1].endsWith("wasm-to-sourcemap.js")) {
     let wasmPath = process.argv[2];
     console.log(wasmPath);
     let wasmFile = fs.readFileSync(wasmPath);
     //console.log(generateTypingsFile(wasmFile));
 
+    //console.log(getWasmImports(wasmFile)[1].javascriptTypeNames);
+
+
+
+    console.log(getWasmMemoryExports(wasmFile));
+
+
+    /*
+    let nameValueSections = getNameValueSections(sections);
+    let codeSection = Object.values(sections).filter(x => x.sectionId === 10)[0];
+    let dwarfSections = getDwarfSections(
+        nameValueSections[".debug_line"],
+        codeSection.offset
+    );
+
+    let infos = parseDwarfSection(dwarfSections[0]);
+
+    
+    console.log(".debug_info");
+    let { instances, lookup } = getDwarfAbbrevs(sections);
+
+    for(let abbrev of instances) {
+        logAbbrevInst(abbrev, undefined, undefined, lookup, 100);
+    }
+    */
     
 
-    console.log(getWasmFunctionExports(wasmFile).filter(x => x.name === "returnCallFnc")[0]);
+    //console.log(getWasmFunctionExports(wasmFile).filter(x => x.name === "returnCallFnc")[0]);
 
     //let sections = getSections(wasmFile);
     //console.log(sections.map(x => x.sectionId + " " + x.contents.length));

@@ -3,7 +3,7 @@ const child_process = require("child_process");
 const clang = require("clang-wasm");
 const { compile } = require("./wasm-compiler");
 
-const { generateSourceMap, replaceSourceMapURL, removeDwarfSection, getWasmFunctionExports, getWasmMemoryExports, copyRequireDwarfSections, elemAllFunctions } = require("./wasm-to-sourcemap");
+const { generateSourceMap, replaceSourceMapURL, removeDwarfSection, getWasmFunctionExports, getWasmMemoryExports, copyRequireDwarfSections, elemAllFunctions, getWasmImports, getTypedArrayCtorFromMemoryObj } = require("./wasm-to-sourcemap");
 
 
 const loaderUtils = require("loader-utils");
@@ -64,8 +64,8 @@ module.exports.transform = async function() {
 
     // Always do one debug build, to produce the dwarf information needed to:
     //  - emit the .d.ts file
-    //  - convert pointer return values to Buffers
-    //  - convert function return values to the correct function
+    //  - know when to convert pointer return values to a Buffer
+    //  - know when to convert function return values to a function
     await compileCpp(inputPath, wasmPath, getParameters(true), includes => {
         for (let include of includes) {
             this.addDependency(require("path").resolve(include));
@@ -117,26 +117,71 @@ module.exports.transform = async function() {
 
     let omitDocComments = false;
     {
-        newTypingsFile += getDefinitions();
-        newTypingsFile += "\n";
-        newTypingsFile += `/** Returns a promise that is resolved when compilation is complete (does not trigger compilation though, compilation starts as soon as an import happens). Once compilation is complete returns a raw object instead of a promise, and will never return a promise again. */\n`;
-        newTypingsFile += `export declare function CompileWasmFunctions(): Promise<{\n${getDefinitions("    ", true, true)}}>;\n`;
+        let importList = getWasmImports(wasmFile);
+        let memoryExports = getWasmMemoryExports(wasmFile);
+        let functionExports = getWasmFunctionExports(wasmFile);
 
-        function getDefinitions(indent = "", forObject, noPromises) {
+        newTypingsFile += `// AUTO GENERATED FILE FROM DO NOT EDIT DIRECTLY. SOURCE: ${wasmPath}\n`;
+
+        if(importList.length > 0) {
+            newTypingsFile += "\n";
+            newTypingsFile += "// IMPORTANT! The promise results of promises will not be resolved until CompileWasmFunctions is called with the required javascript function definitions.";
+            newTypingsFile += "\n";
+            newTypingsFile += "\n";
+        }
+
+        newTypingsFile += getDefinitions(functionExports);
+        newTypingsFile += "\n";
+        if(importList.length === 0) {
+            newTypingsFile += `/** Returns a promise that is resolved when compilation is complete (does not trigger compilation though, compilation starts as soon as an import happens). Once compilation is complete returns a raw object instead of a promise, and will never return a promise again. */\n`;
+        } else {
+            newTypingsFile += `/** Triggers compilation with the given javascript functions. Returns a promise that is resolved when compilation is complete. May only be called once. */\n`;
+        }
+
+        let importObject = getDefinitions(importList, "    ", true, true, true);
+        let moduleObject = getDefinitions(functionExports, "    ", true, true);
+
+        let importSignature = importList.length === 0 ? "" : `requiredJavascriptFunctions: {\n${importObject}}`;
+
+        newTypingsFile += `export declare function CompileWasmFunctions(${importSignature}): Promise<{\n${moduleObject}}>;\n`;
+
+        let typedArrayTypes = "Buffer|Uint8Array|Uint16Array|Uint32Array|Int8Array|Int16Array|Int32Array|Float32Array|Float64Array|BigUint64Array|BigInt64Array";
+
+        newTypingsFile += "\n";
+        newTypingsFile += `export declare function UtilGetBufferFromAddress(address: number): ${typedArrayTypes};\n`;
+        newTypingsFile += `export declare function UtilGetAddressFromBuffer(wasmBuffer: ${typedArrayTypes}): number;\n`;
+        newTypingsFile += `export declare function UtilGetFncFromArg(arg: number): Function;\n`;
+        newTypingsFile += `export declare function UtilGetArgFromFnc(wasmFnc: Function): number;\n`;
+
+        function getDefinitions(functions, indent = "", forObject, noPromises, noDefinitions) {
             let definitions = "";
 
             let varPrefix = forObject ? "" : "export declare const ";
             let fncPrefix = forObject ? "" : "export declare function ";
 
-            let memoryExports = getWasmMemoryExports(wasmFile);
-            for(let exportName in memoryExports) {
-                definitions += `${indent}/** ${memoryExports[exportName].size} bytes */\n${indent}${varPrefix}${exportName}: Buffer;\n`;
+            if(!noDefinitions) {
+
+                for(let exportName in memoryExports) {
+                    let memoryObj = memoryExports[exportName];
+                    let baseType = memoryObj.typeName.split("*")[0];
+
+                    let buffer = "Buffer";
+                    let typedArrayCtor = getTypedArrayCtorFromMemoryObj(memoryObj);
+                    if(typedArrayCtor) {
+                        buffer = typedArrayCtor.name;
+                    }
+                    if(buffer === "Buffer") {
+                        console.error(`Value size does not correspond to a native typed array, ${memoryObj.float ? "float" : ""} ${memoryObj.signed ? "signed" : "unsigned"} byteWidth=${memoryObj.byteWidth}. Leaving as Buffer`);
+                    }
+
+                    definitions += `${indent}/** ${baseType}[${memoryObj.count || 1}] */\n${indent}${varPrefix}${exportName}: ${buffer};\n`;
+                }
+
+                definitions += "\n";
             }
 
-            definitions += "\n";
-
-            let functionExports = getWasmFunctionExports(wasmFile);
-            for(let functionObj of functionExports) {
+            for(let i = 0; i < functions.length; i++) {
+                let functionObj = functions[i];
 
                 if(functionObj.warning) {
                     definitions += `// WARNING: ${functionObj}\n`;
@@ -155,7 +200,7 @@ module.exports.transform = async function() {
                     }
                 }
                 
-                if(!omitDocComments) {
+                if(!omitDocComments && docCommentLines.length > 0) {
                     definitions += [`/**`, ...docCommentLines.map(x => " * " + x), ` * */`].map(x => indent + x + "\n").join("");
                 }
                 if(noPromises) {
@@ -163,7 +208,7 @@ module.exports.transform = async function() {
                 } else {
                     definitions += `${indent}${fncPrefix}${name}(${typeNamesStr}): ${returnType.type} | Promise<${returnType.type}>;\n`;
                 }
-                if(!omitDocComments) {
+                if(!omitDocComments && i < functions.length - 1) {
                     definitions += "\n";
                 }
             }
