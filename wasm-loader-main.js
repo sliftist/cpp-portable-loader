@@ -119,7 +119,7 @@ module.exports.transform = async function() {
     }
 
     let typingsPath = inputPath + ".d.ts";
-    let prevContents = readFilePromise(typingsPath);
+    let prevContents = (await readFilePromise(typingsPath)).toString("utf8");
 
     let newTypingsFile = "";
 
