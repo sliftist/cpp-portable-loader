@@ -45,7 +45,7 @@ function getParameters(debugBuild) {
 }
 
 module.exports.transform = async function() {
-    let options = loaderUtils.getOptions(this);
+    let options = loaderUtils.getOptions(this) || Object.create(null);
 
     let debugBuild = ((this.mode === "development" || options.forceDebug) && !options.forceRelease);
     //debugBuild = false;
