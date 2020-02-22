@@ -19,7 +19,7 @@ const loaderUtils = require("loader-utils");
 function readFilePromise(filePath) {
     return new Promise((resolve, reject) => {
         fs.readFile(filePath, (err, data) => {
-            err ? reject(err) : resolve(data);
+            err ? resolve("") : resolve(data);
         });
     });
 }
@@ -28,6 +28,11 @@ function writeFilePromise(filePath, contents) {
         fs.writeFile(filePath, contents, (err, data) => {
             err ? reject(err) : resolve(data);
         });
+    });
+}
+function existsFilePromise(filePath) {
+    return new Promise((resolve) => {
+        fs.exists(filePath, resolve);
     });
 }
 
@@ -60,6 +65,7 @@ module.exports.transform = async function() {
 
     
     let inputPath = this.resourcePath.replace(/\\/g, "/");
+
 
     let relativePath = this.resource.slice(this.rootContext.length).replace(/\\/g, "/");
     // We need *A* output path, but it doesn't need to be in the output directory, or something sensible. However,
@@ -192,7 +198,7 @@ module.exports.transform = async function() {
                 let functionObj = functions[i];
 
                 if(functionObj.warning) {
-                    definitions += `// WARNING: ${functionObj}\n`;
+                    definitions += `// WARNING: ${functionObj.warning}\n`;
                     continue;
                 }
 
@@ -229,7 +235,8 @@ module.exports.transform = async function() {
     // Make sure we only write the .d.ts file if it changed, OTHERWISE we may infintely loop
     //  (although, the user should REALLY only trigger on .ts file changes, not .d.ts, as usually .d.ts files
     //  shouldn't change the build output (the only do if the previous output was nothing, as the build failed))
-    if(newTypingsFile !== prevContents) {
+    let filesExists = await existsFilePromise(typingsPath);
+    if(newTypingsFile !== prevContents || !filesExists) {
         await writeFilePromise(typingsPath, newTypingsFile);
     }
 

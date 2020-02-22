@@ -1640,6 +1640,9 @@ function getWasmMemoryExports(wasmFile) {
                     memoryObj.size = abbrevObj.size;
                     memoryObj.count = abbrevObj.count;
                 }
+                if(!abbrevObj.typeName) {
+                    console.log(abbrevObj);
+                }
                 Object.assign(memoryObj, typeNameToSize(abbrevObj.typeName));
                 memoryObj.typeName = abbrevObj.typeName;
             }
@@ -1665,9 +1668,9 @@ function typeNameToSize(typeName) {
 
     typeName = typeName.split("*")[0];
 
-    if(typeName.startsWith("unsigned")) {
+    if(typeName.includes("unsigned ")) {
         signed = false;
-        typeName = typeName.slice("unsigned ".length);
+        typeName = typeName.split("unsigned ").join("");
     }
 
     if(typeName === "char") {
@@ -1710,6 +1713,27 @@ function getAbbrevType(abbrev, lookup) {
 
     let typeName = getAttValue(baseType, "DW_AT_name");
 
+    if(baseType.tag === "DW_TAG_const_type") {
+        return getAbbrevType(baseType, lookup);
+    }
+    if(baseType.tag === "DW_TAG_typedef") {
+        let result = getAbbrevType(baseType, lookup);
+        result.typeName = result.typeName || typeName;
+        return result;
+    }
+
+    if(baseType.tag === "DW_TAG_structure_type" || baseType.tag === "DW_TAG_class_type") {
+        // TODO: Calculate the size of the structure, and return a typed array large enough to hold it.
+        //  And we could also encode the structure information here, allowing our javascript code to
+        //  decode the object into a javascript object.
+
+        return {
+            object: true,
+            typeName: typeName || "",
+            type: "number"
+        };
+    }
+
     if(baseType.tag === "DW_TAG_pointer_type" || baseType.tag === "DW_TAG_array_type") {
         let result = getAbbrevType(baseType, lookup);
         if(result.subFunction) {
@@ -1717,7 +1741,21 @@ function getAbbrevType(abbrev, lookup) {
             return result;
         }
 
+        if(result.object) {
+            result.typeName = result.typeName + "*";
+            return result;
+        }
+
         typeName = typeName || result.typeName;
+
+        /*
+        if(!typeName) {
+            console.error("Invalid abbrev with no typeName");
+            logAbbrevInst(baseType, undefined, undefined, lookup);
+        }
+        //*/
+
+        typeName = typeName || "NO_TYPE_FOUND";
 
         let subrangeAbbrev = baseType.children.filter(x => x.tag === "DW_TAG_subrange_type")[0];
         if(subrangeAbbrev) {
@@ -1756,11 +1794,6 @@ function getAbbrevType(abbrev, lookup) {
             typeName,
             subFunction: true,
         };
-    }
-    if(baseType.tag === "DW_TAG_typedef") {
-        let result = getAbbrevType(baseType, lookup);
-        //result.typeName = typeName;
-        return result;
     }
 
 
@@ -2177,9 +2210,41 @@ if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1
 
     //console.log(getWasmImports(wasmFile)[1].javascriptTypeNames);
 
+    let sections = getSections(wasmFile);
+
+    let nameValueSections = getNameValueSections(sections);
+
+    // TODO: Okay... uh... remap include directories, to be urls, and... that may be the issue?
+    let codeSection = Object.values(sections).filter(x => x.sectionId === 10)[0];
+    let dwarfSections = getDwarfSections(
+        nameValueSections[".debug_line"],
+        codeSection.offset
+    );
+
+    for(let dwarfSection of dwarfSections) {
+        console.log(dwarfSection.file_names);
+        console.log(dwarfSection.include_directories);
+    }
+
+    //console.log(dwarfSections[0].fullFilePaths);
+    //console.log(nameValueSections[".debug_line"].toString("ascii"));
+    
+    /*
+    
+    let codeSection = Object.values(sections).filter(x => x.sectionId === 10)[0];
+    
+
+   
+    console.log(".debug_info");
+    let { instances, lookup } = getDwarfAbbrevs(sections);
+
+    for(let abbrev of instances) {
+        logAbbrevInst(abbrev, undefined, undefined, lookup, 100);
+    }
+    */
 
 
-    console.log(getWasmMemoryExports(wasmFile));
+    //console.log(getWasmMemoryExports(wasmFile));
 
 
     /*
