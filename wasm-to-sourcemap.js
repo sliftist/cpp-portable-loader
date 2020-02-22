@@ -1,4 +1,3 @@
-const fs = require("fs");
 const { parseMappingsPart, encodeMappingsPart } = require("./sourceMapParse");
 
 function mapObjectValues(object, map) {
@@ -11,7 +10,7 @@ function mapObjectValues(object, map) {
 
 function readFilePromise(filePath) {
     return new Promise((resolve, reject) => {
-        fs.readFile(filePath, (err, data) => {
+        require("fs").readFile(filePath, (err, data) => {
             err ? reject(err) : resolve(data);
         });
     });
@@ -46,7 +45,7 @@ function logRemaining() {
 let fileLineCache = {};
 function getLines(file) {
     if (!(file in fileLineCache)) {
-        fileLineCache[file] = fs.readFileSync(file).toString().split("\n");
+        fileLineCache[file] = require("fs").readFileSync(file).toString().split("\n");
     }
     return fileLineCache[file];
 }
@@ -2205,7 +2204,7 @@ function getTypedArrayCtorFromMemoryObj(memoryObj) {
 if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1].endsWith("wasm-to-sourcemap.js")) {
     let wasmPath = process.argv[2];
     console.log(wasmPath);
-    let wasmFile = fs.readFileSync(wasmPath);
+    let wasmFile = require("fs").readFileSync(wasmPath);
     //console.log(generateTypingsFile(wasmFile));
 
     //console.log(getWasmImports(wasmFile)[1].javascriptTypeNames);
@@ -2305,7 +2304,7 @@ if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1
         //*
         let wasmPath = process.argv[2];
         console.log(wasmPath);
-        let wasmFile = fs.readFileSync(wasmPath);
+        let wasmFile = require("fs").readFileSync(wasmPath);
         let sections = getSections(wasmFile);
         //console.log(sections.map(x => x.sectionId + " " + x.contents.length));
         let nameValueSections = getNameValueSections(sections);
