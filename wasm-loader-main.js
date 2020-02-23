@@ -71,6 +71,7 @@ module.exports.transform = async function() {
     // We need *A* output path, but it doesn't need to be in the output directory, or something sensible. However,
     //  using a path that is symmetrical with the input file, but in the output directory, makes debugging easier.
     let wasmPath = this._compilation.options.output.path.replace(/\\/g, "/") + "/" + relativePath + ".wasm";
+    let jsOutputPath = this._compilation.options.output.path.replace(/\\/g, "/") + "/" + relativePath + ".js";
 
     await new Promise(resolve => fs.mkdir(require("path").dirname(wasmPath), { recursive: true }, resolve));
 
@@ -145,11 +146,15 @@ module.exports.transform = async function() {
     let hash = Buffer.from(sha3_512(wasmFile)).toString("base64");
     hash = inputPath + hash;
 
-    return (
+    let moduleContents = (
 `// Bytes ${wasmFile.length}, build took ${buildTime.toFixed(1)}ms
 const compiler = require(${wasmCompilerUrl});
 module.exports = compiler.compile(new Uint8Array([${wasmFile.join(",")}]), ${JSON.stringify(hash)})`
     );
+
+    await writeFilePromise(jsOutputPath, moduleContents);
+
+    return moduleContents;
 };
 
 
