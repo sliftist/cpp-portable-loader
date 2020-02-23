@@ -1615,7 +1615,7 @@ function getWasmMemoryExports(wasmFile) {
 
     let layoutSizes = [];
     let memorySorted = Object.keys(memoryLayout).map(x => +x);
-    memorySorted.sort();
+    memorySorted.sort((a, b) => a - b);
     for(let i = 0; i < memorySorted.length - 1; i++) {
         let address = memorySorted[i];
         let globalIndex = memoryLayout[address];
@@ -1644,6 +1644,7 @@ function getWasmMemoryExports(wasmFile) {
             if(abbrevObj) {
                 if(abbrevObj.count) {
                     memoryObj.size = abbrevObj.size;
+
                     memoryObj.count = abbrevObj.count;
                 }
                 if(!abbrevObj.typeName) {
@@ -1654,6 +1655,11 @@ function getWasmMemoryExports(wasmFile) {
                 }
                 memoryObj.typeName = abbrevObj.typeName;
             }
+        }
+
+        if(memoryObj.size < 0) {
+            debugger;
+            console.log(sizeObj, abbrev);
         }
 
         memoryLookup[name] = memoryObj;
@@ -2227,7 +2233,7 @@ if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1
     let { instances, lookup } = getDwarfAbbrevs(sections);
 
     for(let abbrev of instances) {
-        logAbbrevInst(abbrev, undefined, undefined, lookup, 100);
+        //logAbbrevInst(abbrev, undefined, undefined, lookup, 100);
     }
     
 
