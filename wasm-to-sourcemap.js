@@ -2219,7 +2219,7 @@ function getTypedArrayCtorFromMemoryObj(memoryObj) {
     return undefined;
 }
 
-if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1].endsWith("wasm-to-sourcemap.js")) {
+if (typeof process !== "undefined" && process.argv.length >= 2 && process.argv[1].endsWith("wasm-to-sourcemap.js")) {
     let wasmPath = process.argv[2];
     console.log(wasmPath);
     let wasmFile = requireAtRuntime("fs").readFileSync(wasmPath);
