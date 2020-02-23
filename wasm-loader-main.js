@@ -165,7 +165,9 @@ function generateTypings(wasmFile, { omitDocComments, wasmPath }) {
     let memoryExports = getWasmMemoryExports(wasmFile);
     let functionExports = getWasmFunctionExports(wasmFile);
 
-    newTypingsFile += `// AUTO GENERATED FILE FROM DO NOT EDIT DIRECTLY. SOURCE: ${wasmPath}\n`;
+    newTypingsFile += `// AUTO GENERATED FILE DO NOT EDIT DIRECTLY. SOURCE: ${wasmPath}\n`;
+    newTypingsFile += "\n";
+    
 
     if(importList.length > 0) {
         newTypingsFile += "\n";
