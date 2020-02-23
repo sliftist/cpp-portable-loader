@@ -1635,6 +1635,7 @@ function getWasmMemoryExports(wasmFile) {
     for(let sizeObj of layoutSizes) {
         let name = exportNames[sizeObj.globalIndex];
         if(name === undefined || name.startsWith("__")) continue;
+        if(name.startsWith("SHIM__")) continue;
 
         let memoryObj = { size: sizeObj.size, address: sizeObj.address };
 
@@ -1873,7 +1874,7 @@ function getWasmFunctionExports(wasmFile) {
     let externalAbbrevs = instances[0].children.filter(x => x.attributes.some(y => y.name === "DW_AT_external"));
     for(let abbrev of externalAbbrevs) {
         let name = getAttValue(abbrev, "DW_AT_name");
-        if(name.startsWith("SHIM_")) continue;
+        if(name.startsWith("SHIM__")) continue;
         if(name.startsWith("INTERNAL_")) continue;
         if(name === "__cxa_allocate_exception") continue;
         if(name === "__cxa_throw") continue;

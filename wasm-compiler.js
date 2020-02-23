@@ -115,13 +115,13 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
 
     // Some basic error handling, so at least string throws (such as   throw "x too big"; )  can work.
     function getLastError() {
-        if("lastErrorStringForShim" in exportsObj) {
-            if (exportsObj.lastErrorStringForShim[0]) {
-                let length = exportsObj.lastErrorStringForShim[0];
-                return new TextDecoder().decode(exportsObj.lastErrorStringForShim.slice(1, length + 1));
+        if("SHIM__lastErrorString" in exportsObj) {
+            if (exportsObj.SHIM__lastErrorString[0]) {
+                let length = exportsObj.SHIM__lastErrorString[0];
+                return new TextDecoder().decode(exportsObj.SHIM__lastErrorString.slice(1, length + 1));
             }
         }
-        return `A call from wasm to the javascript wrapping function "SHIM__throwCurrentError" was made, but the waasm file has no lastErrorStringForShim export (an array containing the error), so this is invalid.`;
+        return `A call from wasm to the javascript wrapping function "SHIM__lastErrorString" was made, but the wasm file has no SHIM__lastErrorString export (an array containing the error), so this is invalid.`;
     }
     function SHIM__throwCurrentError() {
         let error = new Error(getLastError());
