@@ -12,8 +12,6 @@ let { getWasmMemoryExports, getWasmFunctionExports, getWasmImports, getTypedArra
 
 let g = Function('return this')();
 
-const DuplicateModule = module.exports.DuplicateModule = Symbol("NewModuleFnc");
-
 module.exports.CompileWasmFunctionsName = "CompileWasmFunctions";
 
 function isEmpty(obj) {
@@ -173,8 +171,11 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
     for(let exportName in memoryExports) {
         let memoryObj = memoryExports[exportName];
         let { size, address } = memoryObj;
+
+        // Warning is given after compilation finishes
+        if(size < 0) continue;
         
-        exportsObj[exportName] = Buffer.alloc(size);
+        exportsObj[exportName] = new Uint8Array(size);
 
         let TypedArrayCtor = getTypedArrayCtorFromMemoryObj(memoryObj);
         if(TypedArrayCtor) {
@@ -235,7 +236,12 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
             let memoryObj = memoryExports[exportName];
             let { size, address } = memoryObj;
 
-            let buffer = Buffer.from(baseExports.memory.buffer, address, size);
+            if(size < 0) {
+                console.warn(`Invalid size, ${size}, for ${exportName}, ignoring export.`);
+                continue;
+            }
+
+            let buffer = new Uint8Array(baseExports.memory.buffer, address, size);
             let source = exportsObj[exportName];
             buffer.set(new Uint8Array(source.buffer, source.byteOffset));
 
@@ -335,8 +341,8 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
 
         return exportsPromise;
     };
-    exportsObj[DuplicateModule] = function () {
-        return compile(webAssembly);
+    exportsObj.CompileNewWasm = function (functions) {
+        return compile(webAssembly).CompileWasmFunctions(functions);
     };
 
     exportsObj.UtilGetBufferFromAddress = function(address) {

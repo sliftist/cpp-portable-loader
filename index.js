@@ -1,13 +1,20 @@
-const fs = require("fs");
+function isNode() {
+    return typeof window === "undefined";
+}
 
-// Use eval to prevent webpack from inlining wasm-loader-main.
-let requireReal = eval("require");
-let path = requireReal.resolve("./wasm-loader-main");
-// Make the next require call get a new wasm-loader-main, by clearing the cache of the old one.
-fs.watchFile(path, () => {
-    delete require.cache[path];
-});
+if(isNode()) {
+    // Use eval to prevent webpack from inlining wasm-loader-main.
+    let requireAtRuntime = eval("require");
 
-module.exports = function transformWrapper() {
-    return requireReal("./wasm-loader-main").transform.apply(this, arguments);
-};
+    const fs = requireAtRuntime("fs");
+
+    let path = requireAtRuntime.resolve("./wasm-loader-main");
+    // Make the next require call get a new wasm-loader-main, by clearing the cache of the old one.
+    fs.watchFile(path, () => {
+        delete require.cache[path];
+    });
+
+    module.exports = function transformWrapper() {
+        return requireAtRuntime("./wasm-loader-main").transform.apply(this, arguments);
+    };
+}

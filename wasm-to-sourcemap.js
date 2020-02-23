@@ -1,5 +1,12 @@
 const { parseMappingsPart, encodeMappingsPart } = require("./sourceMapParse");
 
+function isNode() {
+    return typeof window === "undefined";
+}
+
+// Allows requiring without causing it to be added to the webpack bundle.
+const requireAtRuntime = isNode() ? eval("require") : function () { throw new Error(`Tried to call require in browser.`); };
+
 function mapObjectValues(object, map) {
     let result = Object.create(null);
     for (let key in object) {
@@ -10,7 +17,7 @@ function mapObjectValues(object, map) {
 
 function readFilePromise(filePath) {
     return new Promise((resolve, reject) => {
-        require("fs").readFile(filePath, (err, data) => {
+        requireAtRuntime("fs").readFile(filePath, (err, data) => {
             err ? reject(err) : resolve(data);
         });
     });
@@ -45,7 +52,7 @@ function logRemaining() {
 let fileLineCache = {};
 function getLines(file) {
     if (!(file in fileLineCache)) {
-        fileLineCache[file] = require("fs").readFileSync(file).toString().split("\n");
+        fileLineCache[file] = requireAtRuntime("fs").readFileSync(file).toString().split("\n");
     }
     return fileLineCache[file];
 }
@@ -1642,7 +1649,9 @@ function getWasmMemoryExports(wasmFile) {
                 if(!abbrevObj.typeName) {
                     console.log(abbrevObj);
                 }
-                Object.assign(memoryObj, typeNameToSize(abbrevObj.typeName));
+                if(!abbrevObj.object) {
+                    Object.assign(memoryObj, typeNameToSize(abbrevObj.typeName));
+                }
                 memoryObj.typeName = abbrevObj.typeName;
             }
         }
@@ -1691,6 +1700,9 @@ function typeNameToSize(typeName) {
     } else if(typeName === "long double") {
         byteWidth = 16;
         float = true;
+    } else if(typeName === "bool") {
+        byteWidth = 1;
+        signed = false;
     } else {
         console.log(`Unhandled type ${typeName}, assuming width is 4 bytes`);
         byteWidth = 4;
@@ -2204,26 +2216,20 @@ function getTypedArrayCtorFromMemoryObj(memoryObj) {
 if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1].endsWith("wasm-to-sourcemap.js")) {
     let wasmPath = process.argv[2];
     console.log(wasmPath);
-    let wasmFile = require("fs").readFileSync(wasmPath);
+    let wasmFile = requireAtRuntime("fs").readFileSync(wasmPath);
     //console.log(generateTypingsFile(wasmFile));
 
     //console.log(getWasmImports(wasmFile)[1].javascriptTypeNames);
 
     let sections = getSections(wasmFile);
 
-    let nameValueSections = getNameValueSections(sections);
+    console.log(".debug_info");
+    let { instances, lookup } = getDwarfAbbrevs(sections);
 
-    // TODO: Okay... uh... remap include directories, to be urls, and... that may be the issue?
-    let codeSection = Object.values(sections).filter(x => x.sectionId === 10)[0];
-    let dwarfSections = getDwarfSections(
-        nameValueSections[".debug_line"],
-        codeSection.offset
-    );
-
-    for(let dwarfSection of dwarfSections) {
-        console.log(dwarfSection.file_names);
-        console.log(dwarfSection.include_directories);
+    for(let abbrev of instances) {
+        logAbbrevInst(abbrev, undefined, undefined, lookup, 100);
     }
+    
 
     //console.log(dwarfSections[0].fullFilePaths);
     //console.log(nameValueSections[".debug_line"].toString("ascii"));
@@ -2234,12 +2240,7 @@ if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1
     
 
    
-    console.log(".debug_info");
-    let { instances, lookup } = getDwarfAbbrevs(sections);
-
-    for(let abbrev of instances) {
-        logAbbrevInst(abbrev, undefined, undefined, lookup, 100);
-    }
+    
     */
 
 
@@ -2304,7 +2305,7 @@ if (typeof process !== "undefined" && process.argv.length >= 1 && process.argv[1
         //*
         let wasmPath = process.argv[2];
         console.log(wasmPath);
-        let wasmFile = require("fs").readFileSync(wasmPath);
+        let wasmFile = requireAtRuntime("fs").readFileSync(wasmPath);
         let sections = getSections(wasmFile);
         //console.log(sections.map(x => x.sectionId + " " + x.contents.length));
         let nameValueSections = getNameValueSections(sections);
