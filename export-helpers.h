@@ -7,13 +7,19 @@ typedef unsigned long long uint64_t;
 typedef uint64_t size_t;
 
 
+#if defined __clang__
+#define EXPORT __attribute__((visibility("default")))
+#else
+#define EXPORT
+#endif
+
 
 extern "C" {
     void SHIM__throwCurrentError();
 }
 
 
-unsigned char SHIM__lastErrorString[250];
+EXPORT unsigned char SHIM__lastErrorString[250];
 
 void INTERNAL_setError(const char* message) {
     int length = 0;

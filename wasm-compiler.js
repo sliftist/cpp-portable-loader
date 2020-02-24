@@ -1,13 +1,3 @@
-//todonext;
-// Well... first, work wasm-compiler.ts back to js (or just run it through the compiler).
-//  But then... why aren't we parsing the wasm file for exports to get rid of the need for the proxy?
-//  This would also allow promise returning functions to exist without the need for CompileWasmFunctions to be called first...
-//  which allows direct import of the functions.
-// Also... we can make the functions dual return T|Promise<T>, so you can still call CompileWasmFunctions, to have them always return T...
-// ALTHOUGH! Before we change it, we will need a wasm file to test, so... we should get this working first...
-// We should take our compilation from devserver to just webpack, so we can see if emitFile really does nothing? And if it does something...
-//  we should use it (maybe with loader-utils) to properly get a file path for our .wasm temp outputs.
-
 let { getWasmMemoryExports, getWasmFunctionExports, getWasmImports, getTypedArrayCtorFromMemoryObj } = require("./wasm-to-sourcemap");
 
 let g = Function('return this')();
@@ -190,7 +180,7 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
     for(let fncExport of functionExports) {
         if(fncExport.warning) continue;
 
-        exportsObj[fncExport.name] = async function() {
+        exportsObj[fncExport.demangledName] = async function() {
             if(!dynamicFunctionsResolved) {
                 setTimeout(() => {
                     if(!dynamicFunctionsResolved) {
@@ -199,9 +189,9 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
                 }, initializeWarningTimeout);
             }
             let loadedExports = await exportsPromise;
-            return loadedExports[exportName](...arguments);
+            return loadedExports[fncExport](...arguments);
         };
-        exportsObj[fncExport.name][WasmFncObj] = fncExport;
+        exportsObj[fncExport.demangledName][WasmFncObj] = fncExport;
     }
 
     let elemIdLookup = Object.create(null);
@@ -273,12 +263,12 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
                 //  and convert any Buffers that our from this module to pass the correct memory offsets.
                 let fnc = baseExports[fncExport.name];
 
-                exportsObj[fncExport.name] = fnc;
+                exportsObj[fncExport.demangledName] = fnc;
 
                 let needsShim = fncExport.javascriptTypeNames.some(x => x.type.pointer || x.type.subFunction) || fncExport.returnType.pointer || fncExport.returnType.subFunction;
 
                 if(needsShim) {
-                    exportsObj[fncExport.name] = function() {
+                    exportsObj[fncExport.demangledName] = function() {
                         let args = Array.from(arguments);
                         args = args.map(arg => {
                             if(arg && typeof arg === "object") {
@@ -322,7 +312,7 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
                         return result;
                     };
                 }
-                exportsObj[fncExport.name][WasmFncObj] = fncExport;
+                exportsObj[fncExport.demangledName][WasmFncObj] = fncExport;
             }
         }
 

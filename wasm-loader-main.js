@@ -36,19 +36,6 @@ function existsFilePromise(filePath) {
     });
 }
 
-function getParameters(debugBuild) {
-    let parameters = [
-        `--target=wasm32`,
-        `-nostdlib`,
-        `-H`,
-        `-Wl,--no-entry`,
-        `-Wl,--export-all`,
-        `-Wl,--allow-undefined`,
-        debugBuild ? "-g" : `-Ofast`
-    ];
-    return parameters;
-}
-
 module.exports.transform = async function() {
     let options = loaderUtils.getOptions(this) || Object.create(null);
 
@@ -136,8 +123,12 @@ module.exports.transform = async function() {
     // Make sure we only write the .d.ts file if it changed, OTHERWISE we may infintely loop
     //  (although, the user should REALLY only trigger on .ts file changes, not .d.ts, as usually .d.ts files
     //  shouldn't change the build output (the only do if the previous output was nothing, as the build failed))
-    let filesExists = await existsFilePromise(typingsPath);
-    if(newTypingsFile !== prevContents || !filesExists) {
+    if(newTypingsFile !== prevContents) {
+        if(prevContents && !prevContents.includes(`AUTO GENERATED FILE DO NOT EDIT DIRECTLY`)) {
+            newTypingsFile += `\n\n`;
+            newTypingsFile += `\\ Overwrriten typings file:\n`;
+            newTypingsFile += prevContents.split(/\r\n|\n/g).map(x => `\\ ` + x).join("\n");
+        }
         await writeFilePromise(typingsPath, newTypingsFile);
     }
 
@@ -172,8 +163,7 @@ function generateTypings(wasmFile, { omitDocComments, wasmPath }) {
     if(importList.length > 0) {
         newTypingsFile += "\n";
         newTypingsFile += "// IMPORTANT! The promise results of promises will not be resolved until CompileWasmFunctions is called with the required javascript function definitions.";
-        newTypingsFile += "\n";
-        newTypingsFile += "\n";
+        newTypingsFile += "\n\n\n";
     }
 
     newTypingsFile += getDefinitions(functionExports);
@@ -234,6 +224,11 @@ function generateTypings(wasmFile, { omitDocComments, wasmPath }) {
         }
 
         let lastWasWarning = false;
+
+        if(functions.length === 0) {
+            definitions += `// No exports found. The visiblity attribute is required on functions and variables to export them. Try adding __attribute__((visibility("default"))) to functions you wish to export.\n`;
+        }
+
         for(let i = 0; i < functions.length; i++) {
             let functionObj = functions[i];
 
@@ -248,7 +243,8 @@ function generateTypings(wasmFile, { omitDocComments, wasmPath }) {
 
             lastWasWarning = false;
 
-            let { name, javascriptTypeNames, returnType } = functionObj;
+            let { name, demangledName, javascriptTypeNames, returnType } = functionObj;
+            name = demangledName || name;
             let typeNamesStr = javascriptTypeNames.map(x => `${x.name}: ${x.type.type}`).join(", ");
 
             let docCommentLines = javascriptTypeNames.map(x => `@param {${x.type.type}} ${x.name} ${x.type.typeName}`);
@@ -299,6 +295,23 @@ const createSha3_512 = module.exports.createSha3_512 = function createSha3_512()
         };
     })();
 };
+
+
+function getParameters(debugBuild) {
+    let parameters = [
+        `--target=wasm32`,
+        `-nostdlib`,
+        `-H`,
+        `-Wl,--no-entry`,
+        `-Wl,--export-dynamic`,
+        `-fvisibility=hidden`,
+        `-Wl,--allow-undefined`,
+        debugBuild ? "-g" : `-Ofast`,
+    ];
+    return parameters;
+}
+
+
 let sha3_512 = createSha3_512();
 const compileCpp = module.exports.compileCpp = async function compileCpp(inputPath, wasmPath, parameters, onIncludes) {
     let compileError = undefined;

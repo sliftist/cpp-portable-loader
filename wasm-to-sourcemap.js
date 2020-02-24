@@ -1849,8 +1849,6 @@ function getWasmFunctionExports(wasmFile) {
     // TODO: Actually just use getExportNames, and then augment it with DWARF info if it exists, that way
     //  this code will mostly work with just a WASM file.
 
-    let functionExports = [];
-
     let sections = getSections(wasmFile);
 
     let { instances, lookup } = getDwarfAbbrevs(sections);
@@ -1862,14 +1860,14 @@ function getWasmFunctionExports(wasmFile) {
         elemInvertLookup[fncId] = elemId;
     }
 
-
-
     let fncExportsInverted = getExportNames(sections);
     let fncExports = Object.create(null);
     for(let fncId in fncExportsInverted) {
         let fncName = fncExportsInverted[fncId];
         fncExports[fncName] = +fncId;
     }
+
+    let functionExportsLookup = Object.create(null);
 
     let externalAbbrevs = instances[0].children.filter(x => x.attributes.some(y => y.name === "DW_AT_external"));
     for(let abbrev of externalAbbrevs) {
@@ -1892,25 +1890,21 @@ function getWasmFunctionExports(wasmFile) {
             });
 
             let returnType = getAbbrevType(abbrev, lookup) || { type: "void", typeName: undefined };
+            
 
-            if(!(name in fncExports)) {
-                let possibleName = Object.keys(fncExports).filter(x => x.includes(name))[0];
-                
-                let warning = "";
-                if(possibleName) {
-                    warning = `DWARF info has function which does not exist in exports. It looks like you forgot to wrap your functions, like so:  extern "C" { int fnc() { return 5 } }  . Name in DWARF was ${name}, found similar export called ${possibleName}`;
-                } else {
-                    warning = `DWARF info has function which does not exist in exports. Perhaps you forgot to wrap your functions, like so:  extern "C" { int fnc() { return 5 } }  . Name in DWARF was ${name}`;
-                }
-                functionExports.push({ warning });
-            } else {
+            let mangledName = getAttValue(abbrev, "DW_AT_linkage_name") || name;
+
+            if(mangledName in fncExports) {
                 //line = `export declare function ${name}(${javascriptTypeNames}): ${returnType};`;
-                let fncId = fncExports[name];
-                let fncObj = { name, javascriptTypeNames, returnType, fncId };
+                let fncId = fncExports[mangledName];
+                let fncObj = { name: mangledName, demangledName: name, javascriptTypeNames, returnType, fncId };
+
                 if(fncId in elemInvertLookup) {
                     fncObj.elemId = elemInvertLookup[fncId];
                 }
-                functionExports.push(fncObj);
+                functionExportsLookup[mangledName] = fncObj;
+
+                //functionExports.push(fncObj);
             }
         }
         // TODO: Do something like this in getWasmMemoryExports, to add better type information (to get the actual array type, at least for commenting purposes)
@@ -1922,7 +1916,7 @@ function getWasmFunctionExports(wasmFile) {
         }*/
     }
 
-    return functionExports;
+    return Object.values(functionExportsLookup);
 }
 
 
@@ -2226,16 +2220,20 @@ if (typeof process !== "undefined" && process.argv.length >= 2 && process.argv[1
     let wasmFile = requireAtRuntime("fs").readFileSync(wasmPath);
     //console.log(generateTypingsFile(wasmFile));
 
-    //console.log(getWasmImports(wasmFile)[1].javascriptTypeNames);
+    //console.log(getWasmFunctionExports(wasmFile));
+    //console.log(getWasmMemoryExports(wasmFile));
+    console.log(getWasmImports(wasmFile));
 
+    /*
     let sections = getSections(wasmFile);
 
     console.log(".debug_info");
     let { instances, lookup } = getDwarfAbbrevs(sections);
 
     for(let abbrev of instances) {
-        //logAbbrevInst(abbrev, undefined, undefined, lookup, 100);
+        logAbbrevInst(abbrev, undefined, undefined, lookup, 100);
     }
+    */
     
 
     //console.log(dwarfSections[0].fullFilePaths);
