@@ -208,13 +208,14 @@ function generateTypings(wasmFile, { omitDocComments, wasmPath }) {
                 let memoryObj = memoryExports[exportName];
                 let baseType = memoryObj.typeName.split("*")[0];
 
-                let buffer = "Uint8Array";
+                let buffer = "";
                 let typedArrayCtor = getTypedArrayCtorFromMemoryObj(memoryObj);
                 if(typedArrayCtor) {
                     buffer = typedArrayCtor.name;
                 }
-                if(buffer === "Uint8Array") {
-                    console.error(`Value size does not correspond to a native typed array, ${memoryObj.float ? "float" : ""} ${memoryObj.signed ? "signed" : "unsigned"} byteWidth=${memoryObj.byteWidth}. Leaving as Uint8Array`);
+                if(buffer === "") {
+                    buffer = "Uint8Array";
+                    console.error(`Value size does not correspond to a native typed array, ${memoryObj.float ? "float" : ""} ${memoryObj.signed ? "signed" : "unsigned"} byteWidth=${memoryObj.byteWidth}. Setting to Uint8Array`);
                 }
 
                 definitions += `${indent}/** ${baseType}[${memoryObj.count || 1}] */\n${indent}${varPrefix}${exportName}: ${buffer};\n`;
