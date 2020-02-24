@@ -126,8 +126,8 @@ module.exports.transform = async function() {
     if(newTypingsFile !== prevContents) {
         if(prevContents && !prevContents.includes(`AUTO GENERATED FILE DO NOT EDIT DIRECTLY`)) {
             newTypingsFile += `\n\n`;
-            newTypingsFile += `\\ Overwrriten typings file:\n`;
-            newTypingsFile += prevContents.split(/\r\n|\n/g).map(x => `\\ ` + x).join("\n");
+            newTypingsFile += `// Overwritten typings file:\n`;
+            newTypingsFile += prevContents.split(/\r\n|\n/g).map(x => `// ` + x).join("\n");
         }
         await writeFilePromise(typingsPath, newTypingsFile);
     }
