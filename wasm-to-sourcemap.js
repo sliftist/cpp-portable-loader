@@ -1634,8 +1634,9 @@ function getWasmMemoryExports(wasmFile) {
     let exportNames = getExportNames(sections, 3);
     for(let sizeObj of layoutSizes) {
         let name = exportNames[sizeObj.globalIndex];
-        if(name === undefined || name.startsWith("__")) continue;
-        if(name.startsWith("SHIM__")) continue;
+        if(name === undefined) continue;
+        //if(name.startsWith("__")) continue;
+        //if(name.startsWith("SHIM__")) continue;
 
         let memoryObj = { size: sizeObj.size, address: sizeObj.address };
 
@@ -1707,7 +1708,7 @@ function typeNameToSize(typeName) {
     } else if(typeName === "long double") {
         byteWidth = 16;
         float = true;
-    } else if(typeName === "bool") {
+    } else if(typeName === "bool" || typeName === "NO_TYPE_FOUND") {
         byteWidth = 1;
         signed = false;
     } else {
@@ -1726,7 +1727,10 @@ function getAbbrevType(abbrev, lookup) {
     let baseType = unwrapAtType(abbrev);
 
     if(!baseType) {
-        return undefined;
+        return {
+            type: "void",
+            typeName: getAttValue(abbrev, "DW_AT_name"),
+        };
     }
 
     let typeName = getAttValue(baseType, "DW_AT_name");
@@ -1754,6 +1758,13 @@ function getAbbrevType(abbrev, lookup) {
 
     if(baseType.tag === "DW_TAG_pointer_type" || baseType.tag === "DW_TAG_array_type") {
         let result = getAbbrevType(baseType, lookup);
+        if(!result) {
+            // I am seeing this in cases like __cxa_allocate_exception. Not entire sure how to handle this.
+            return {
+                type: "any",
+                typeName
+            };
+        }
         if(result.subFunction) {
             // Functions are pointers, but that doesn't mean they should really be pointers, it is just an irrelevant detail.
             return result;
@@ -1872,12 +1883,6 @@ function getWasmFunctionExports(wasmFile) {
     let externalAbbrevs = instances[0].children.filter(x => x.attributes.some(y => y.name === "DW_AT_external"));
     for(let abbrev of externalAbbrevs) {
         let name = getAttValue(abbrev, "DW_AT_name");
-        if(name.startsWith("SHIM__")) continue;
-        if(name.startsWith("INTERNAL_")) continue;
-        if(name === "__cxa_allocate_exception") continue;
-        if(name === "__cxa_throw") continue;
-        if(name === "memcpy") continue;
-        if(name === "memset") continue;
 
         if(abbrev.tag === "DW_TAG_subprogram") {
 

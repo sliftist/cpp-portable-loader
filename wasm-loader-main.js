@@ -211,6 +211,8 @@ function generateTypings(wasmFile, { omitDocComments, wasmPath }) {
 
             for(let exportName in memoryExports) {
                 let memoryObj = memoryExports[exportName];
+                if(!memoryObj.typeName) continue;
+                if(exportName.startsWith("SHIM__")) continue;
                 let baseType = memoryObj.typeName.split("*")[0];
 
                 let buffer = "";
