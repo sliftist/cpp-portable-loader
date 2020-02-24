@@ -13,6 +13,11 @@ const { generateSourceMap, replaceSourceMapURL, removeDwarfSection, getWasmFunct
 //  - support buffers before we load (as in copying the memory)
 //  - support buffers in general
 //  - emit .d.ts file
+// We should use __attribute((used)) instead of __attribute__((visibility("default"))). This will let us get rid of the
+//  `-Wl,--export-dynamic` and `-fvisibility=hidden` flags.
+//  - HOWEVER, this requires an update to clang 9, which changed exception handling in a way which appears to break it.
+//      Once the -fwasm-exceptions change is released (https://reviews.llvm.org/D67208) it should be easier to
+//      handle exceptions.
 
 const loaderUtils = require("loader-utils");
 
