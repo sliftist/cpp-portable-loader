@@ -303,7 +303,7 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
                         if(fncExport.returnType.subFunction) {
                             let elemId = result;
                             if(elemId in elemIdLookup) {
-                                return exportsObj[elemIdLookup[elemId].name];
+                                return exportsObj[elemIdLookup[elemId].demangledName];
                             } else {
                                 console.warn(`Returned element id (from a function that returns a function) that doesn't correspond to any element ids we know.`, fncExport, elemId, elemIdLookup);
                             }
