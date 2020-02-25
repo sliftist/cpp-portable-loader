@@ -2,7 +2,7 @@ let { getWasmMemoryExports, getWasmFunctionExports, getWasmImports, getTypedArra
 
 let g = Function('return this')();
 
-module.exports.CompileWasmFunctionsName = "CompileWasmFunctions";
+module.exports.CompileWasmFunctions = "GetSyncFunctions";
 
 function isEmpty(obj) {
     for(var key in obj) return false;
@@ -184,7 +184,7 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
             if(!dynamicFunctionsResolved) {
                 setTimeout(() => {
                     if(!dynamicFunctionsResolved) {
-                        console.warn(`Failed to call CompileWasmFunctions within a timeout of calling function ${fncExport.name}. The function call won't resolve until CompileWasmFunctions is called.`);
+                        console.warn(`Failed to call GetSyncFunctions within a timeout of calling function ${fncExport.name}. The function call won't resolve until GetSyncFunctions is called.`);
                     }
                 }, initializeWarningTimeout);
             }
@@ -210,7 +210,7 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
                 ... functionsForImports,
                 ... dynamicFunctions
             },
-        })
+        });
     });
 
 
@@ -322,7 +322,7 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
         console.error(e);
     });
 
-    exportsObj.CompileWasmFunctions = function CompileWasmFunctions(functions) {
+    exportsObj.GetSyncFunctions = function GetSyncFunctions(functions) {
         if(exportsLoaded) {
             return exportsObj;
         }
@@ -332,7 +332,7 @@ module.exports.compile = function compile(webAssembly, compilationCacheKey, func
         return exportsPromise;
     };
     exportsObj.CompileNewWasm = function (functions) {
-        return compile(webAssembly).CompileWasmFunctions(functions);
+        return compile(webAssembly).GetSyncFunctions(functions);
     };
 
     exportsObj.UtilGetBufferFromAddress = function(address) {

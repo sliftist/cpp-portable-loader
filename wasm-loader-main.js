@@ -167,16 +167,16 @@ function generateTypings(wasmFile, { omitDocComments, wasmPath }) {
 
     if(importList.length > 0) {
         newTypingsFile += "\n";
-        newTypingsFile += "// IMPORTANT! The promise results of promises will not be resolved until CompileWasmFunctions is called with the required javascript function definitions.";
+        newTypingsFile += "// IMPORTANT! The promise results of promises will not be resolved until GetSyncFunctions is called with the required javascript function definitions.";
         newTypingsFile += "\n\n\n";
     }
 
     newTypingsFile += getDefinitions(functionExports);
     newTypingsFile += "\n";
     if(importList.length === 0) {
-        newTypingsFile += `/** Returns a promise that is resolved when compilation is complete (does not trigger compilation though, compilation starts as soon as an import happens). Once compilation is complete returns a raw object instead of a promise, and will never return a promise again. */\n`;
+        newTypingsFile += `/** Returns a promise that contains all of the above functions, but with the guarantee that they won't return promises. */\n`;
     } else {
-        newTypingsFile += `/** Triggers compilation with the given javascript functions. Returns a promise that is resolved when compilation is complete. May only be called once. */\n`;
+        newTypingsFile += `/** Triggers compilation with the given javascript import functions. Returns a promise that contains all of the above functions, but with the guarantee that they won't return promises. */\n`;
     }
 
     let importObject = getDefinitions(importList, "    ", true, true, true);
@@ -184,7 +184,7 @@ function generateTypings(wasmFile, { omitDocComments, wasmPath }) {
 
     let importSignature = importList.length === 0 ? "" : `requiredJavascriptFunctions: {\n${importObject}}`;
 
-    newTypingsFile += `export declare function CompileWasmFunctions(${importSignature}): Promise<{\n${moduleObject}}>;\n`;
+    newTypingsFile += `export declare function GetSyncFunctions(${importSignature}): Promise<{\n${moduleObject}}>;\n`;
 
     newTypingsFile += "\n";
     newTypingsFile += `/** Recompiles the file, possibly with new imports, creating a new module with new memory space. The module is self contained, and this recompilation doesn't impact the static exported functions. */\n`
@@ -289,7 +289,7 @@ const sha3_512Source = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 35, 7, 96
 const createSha3_512 = module.exports.createSha3_512 = function createSha3_512() {
     return (async () => {
         let fscryptctl2 = compile(sha3_512Source, "SHA3_512_for_loader", { throwCurrentError() { throw new Error(`Unexpected error from sha3_512 code`); } });
-        await fscryptctl2.CompileWasmFunctions();
+        await fscryptctl2.GetSyncFunctions();
         return function sha3_512(input) {
             fscryptctl2.SHA512_init();
             for (let j = 0; j < input.length; j += fscryptctl2.sha512InputData.length) {
