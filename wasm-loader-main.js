@@ -20,6 +20,8 @@ const { generateSourceMap, replaceSourceMapURL, removeDwarfSection, getWasmFunct
 //      handle exceptions.
 // (Although, --compile may be usable. It disables linking, but still emits a wasm file? The file has no exports though,
 //  but emscripten seems to make it work... not sure how...)
+//      Hey... we could copmile with --assemble, and then it appears the output has .hidden for non-exported functions. We already
+//      compile twice for DWARF info, why not three times?
 
 const loaderUtils = require("loader-utils");
 
