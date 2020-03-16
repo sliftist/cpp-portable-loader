@@ -18,7 +18,7 @@ const { generateSourceMap, replaceSourceMapURL, removeDwarfSection, getWasmFunct
 //  - HOWEVER, this requires an update to clang 9, which changed exception handling in a way which appears to break it.
 //      Once the -fwasm-exceptions change is released (https://reviews.llvm.org/D67208) it should be easier to
 //      handle exceptions.
-// (Although, -c may be usable. It disables linking, but still emits a wasm file? The file has no exports though,
+// (Although, --compile may be usable. It disables linking, but still emits a wasm file? The file has no exports though,
 //  but emscripten seems to make it work... not sure how...)
 
 const loaderUtils = require("loader-utils");
