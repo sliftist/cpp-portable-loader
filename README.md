@@ -17,6 +17,14 @@ module.exports = {
 ## Requirements
 - Window 64 bit, OSX 64 bit, or Linux 64 bit
 
+## Features
+- No installation required, all requirements (including the clang compiler) are in npm modules, which require no installation (they have no install scripts in their package.json).
+- Automatic sourcemap generate and inlining
+- Automatic .d.ts file generate for .cpp file, based on actual C++ types
+    - Structs and classes are supported for types
+- Some (very limited) buffer support, allowing non primitive types to be passed to and from C++ code
+- Some (very limited) function support, allowing functions to be passed to and from C++ code
+
 ## Options
 - emitMapFile
     - Emits a .wasm.map beside the .wasm output.
