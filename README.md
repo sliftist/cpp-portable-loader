@@ -18,4 +18,4 @@ module.exports = {
 - Window 64 bit, OSX 64 bit, or Linux 64 bit
 
 ## Caveats
-- throw support is limited and not cross platform.
+- Support for exceptions (via throw) is limited and does not work on Linux.
