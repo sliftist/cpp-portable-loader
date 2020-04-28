@@ -133,7 +133,7 @@ module.exports.transform = async function() {
     //  (although, the user should REALLY only trigger on .ts file changes, not .d.ts, as usually .d.ts files
     //  shouldn't change the build output (the only do if the previous output was nothing, as the build failed))
     if(newTypingsFile !== prevContents) {
-        if(prevContents && !prevContents.includes(`AUTO GENERATED FILE, DO NOT EDIT DIRECTLY`)) {
+        if(prevContents && !prevContents.startsWith(`// AUTO GENERATED FILE`)) {
             newTypingsFile += `\n\n`;
             newTypingsFile += `// Overwritten typings file:\n`;
             newTypingsFile += prevContents.split(/\r\n|\n/g).map(x => `// ` + x).join("\n");
