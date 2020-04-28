@@ -16,7 +16,7 @@ module.exports = {
 };
 ```
 2) Write your .cpp file, marking exported values with `__attribute__((visibility("default")))`, or importing export-helpers from node_modules and using the `EXPORT` macro.:
-```
+```cpp
 /* example.cpp */
 #include "../node_modules/cpp-portable-loader/export-helpers.h"
 int return5() {
@@ -24,12 +24,12 @@ int return5() {
 }
 ```
 3) Import the .cpp file to trigger .d.ts file generation (make sure not to import anything from it, or else webpack will think you are using the import and .d.ts generation will not occur):
-```
+```js
 import "./example.cpp";
 ```
 
 4) Remove the earlier import and import from the .cpp file as if it a JS file:
-```
+```js
 import { return5 } from "./test.cpp"
 ```
 
