@@ -18,6 +18,10 @@ const { generateSourceMap, replaceSourceMapURL, removeDwarfSection, getWasmFunct
 //  - HOWEVER, this requires an update to clang 9, which changed exception handling in a way which appears to break it.
 //      Once the -fwasm-exceptions change is released (https://reviews.llvm.org/D67208) it should be easier to
 //      handle exceptions.
+// (Although, --compile may be usable. It disables linking, but still emits a wasm file? The file has no exports though,
+//  but emscripten seems to make it work... not sure how...)
+//      Hey... we could copmile with --assemble, and then it appears the output has .hidden for non-exported functions. We already
+//      compile twice for DWARF info, why not three times?
 
 const loaderUtils = require("loader-utils");
 
@@ -129,7 +133,7 @@ module.exports.transform = async function() {
     //  (although, the user should REALLY only trigger on .ts file changes, not .d.ts, as usually .d.ts files
     //  shouldn't change the build output (the only do if the previous output was nothing, as the build failed))
     if(newTypingsFile !== prevContents) {
-        if(prevContents && !prevContents.includes(`AUTO GENERATED FILE DO NOT EDIT DIRECTLY`)) {
+        if(prevContents && !prevContents.startsWith(`// AUTO GENERATED FILE`)) {
             newTypingsFile += `\n\n`;
             newTypingsFile += `// Overwritten typings file:\n`;
             newTypingsFile += prevContents.split(/\r\n|\n/g).map(x => `// ` + x).join("\n");
@@ -161,7 +165,7 @@ function generateTypings(wasmFile, { omitDocComments, wasmPath }) {
     let memoryExports = getWasmMemoryExports(wasmFile);
     let functionExports = getWasmFunctionExports(wasmFile);
 
-    newTypingsFile += `// AUTO GENERATED FILE DO NOT EDIT DIRECTLY. SOURCE: ${wasmPath}\n`;
+    newTypingsFile += `// AUTO GENERATED FILE, DO NOT EDIT DIRECTLY. GENERATED FROM: ${wasmPath}\n`;
     newTypingsFile += "\n";
     
 
