@@ -1,3 +1,6 @@
+## Usage
+
+1) Add as your .cpp loader in your webpack.config.js file:
 ```js
 module.exports = {
     resolve: {
@@ -12,6 +15,15 @@ module.exports = {
         modules: ["node_modules"]
     },
 };
+```
+2) Import the .cpp file to trigger .d.ts file generation (make sure not to import anything from it, or else webpack will think you are using the import and .d.ts generation will not occur):
+```
+import "./your_file_name_here.cpp";
+```
+
+3) Remove the earlier import and import from the .cpp file as if it a JS file:
+```
+import { SomeFunctionNameHere } from "./test.cpp"
 ```
 
 ## Requirements
