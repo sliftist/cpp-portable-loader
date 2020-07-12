@@ -18,4 +18,8 @@ if(isNode() && process.env["cpp-portable-loader-dev"]) {
     module.exports = function transformWrapper() {
         return requireAtRuntime("./wasm-loader-main").transform.apply(this, arguments);
     };
+} else {
+    module.exports = function transformWrapper() {
+        return require("./wasm-loader-main").transform.apply(this, arguments);
+    };
 }
