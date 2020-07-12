@@ -1,5 +1,4 @@
 ## Usage
-
 1) Add as your .cpp loader in your webpack.config.js file:
 ```js
 module.exports = {
@@ -16,14 +15,33 @@ module.exports = {
     },
 };
 ```
-2) Import the .cpp file to trigger .d.ts file generation (make sure not to import anything from it, or else webpack will think you are using the import and .d.ts generation will not occur):
+2) Write your .cpp file, marking exported values with `__attribute__((visibility("default")))`, or importing export-helpers from node_modules and using the `EXPORT` macro.:
+```cpp
+/* example.cpp */
+#include "../node_modules/cpp-portable-loader/export-helpers.h"
+int return5() {
+    return 5;
+}
 ```
-import "./your_file_name_here.cpp";
+3) Import the .cpp file to trigger .d.ts file generation (make sure not to import anything from it, or else webpack will think you are using the import and .d.ts generation will not occur):
+```js
+import "./example.cpp";
 ```
 
-3) Remove the earlier import and import from the .cpp file as if it a JS file:
+4) Remove the earlier import and import from the .cpp file as if it a JS file:
+```js
+import { return5 } from "./test.cpp"
 ```
-import { SomeFunctionNameHere } from "./test.cpp"
+
+5) Either call functions and await the promise result, or get all of the functions in a promise, await that, and then call the functions synchronously:
+```js
+import { return5, GetSyncFunctions } from "./test.cpp"
+
+async example() {
+    assert(await return5() === 5);
+    let fncs = await GetSyncFunctions();
+    assert(fncs.return5() === 5);
+}
 ```
 
 ## Requirements
