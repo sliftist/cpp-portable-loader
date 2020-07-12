@@ -2229,7 +2229,7 @@ if (typeof process !== "undefined" && process.argv.length >= 2 && process.argv[1
     //console.log(getWasmMemoryExports(wasmFile));
     console.log(getWasmImports(wasmFile));
 
-    /*
+    //*
     let sections = getSections(wasmFile);
 
     console.log(".debug_info");
@@ -2238,7 +2238,7 @@ if (typeof process !== "undefined" && process.argv.length >= 2 && process.argv[1
     for(let abbrev of instances) {
         logAbbrevInst(abbrev, undefined, undefined, lookup, 100);
     }
-    */
+    //*/
     
 
     //console.log(dwarfSections[0].fullFilePaths);
@@ -2317,12 +2317,12 @@ if (typeof process !== "undefined" && process.argv.length >= 2 && process.argv[1
         console.log(wasmPath);
         let wasmFile = requireAtRuntime("fs").readFileSync(wasmPath);
         let sections = getSections(wasmFile);
-        //console.log(sections.map(x => x.sectionId + " " + x.contents.length));
+        console.log(sections.map(x => x.sectionId + " " + x.contents.length));
         let nameValueSections = getNameValueSections(sections);
         let codeSection = Object.values(sections).filter(x => x.sectionId === 10)[0];
         let exportSection = Object.values(sections).filter(x => x.sectionId === 7)[0];
-        //console.log(mapObjectValues(nameValueSections, x => x.length));
-        //console.log(nameValueSections["sourceMappingURL"]);
+        console.log(mapObjectValues(nameValueSections, x => x.length));
+        console.log(nameValueSections["sourceMappingURL"]);
         let wasts = getFunctionWasts(sections);
         wasts.forEach(debugWastEntry);
         //*/
