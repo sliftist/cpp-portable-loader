@@ -6,6 +6,10 @@ const { compile } = require("./wasm-compiler");
 const { generateSourceMap, replaceSourceMapURL, removeDwarfSection, getWasmFunctionExports, getWasmMemoryExports, copyRequireDwarfSections, elemAllFunctions, getWasmImports, getTypedArrayCtorFromMemoryObj } = require("./wasm-to-sourcemap");
 
 // TODO:
+//  - Use WebAssembly.Instance IF functions are called before the async callback finishes,
+//      so we can seamlessly replace javascript with C++ code.
+
+// TODO:
 // Add flags for enabling/disabling:
 //  - shim functions
 //  - support passing function pointers
