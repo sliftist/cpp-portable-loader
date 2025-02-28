@@ -8,6 +8,7 @@ const { generateSourceMap, replaceSourceMapURL, removeDwarfSection, getWasmFunct
 // TODO:
 //  - Use WebAssembly.Instance IF functions are called before the async callback finishes,
 //      so we can seamlessly replace javascript with C++ code.
+//      - ALTHOUGH, it doesn't work with wasm > 4KB in size (in the browser?)
 
 // TODO:
 // Add flags for enabling/disabling:
